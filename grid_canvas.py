@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QWidget, QLabel, QApplication
 from PySide6.QtGui import QPainter, QPen, QColor, QDrag, QFont
-from PySide6.QtCore import Qt, QMimeData, QPoint, QRect
+from PySide6.QtCore import Qt, QMimeData, QPoint, QRect, QTimer
 from constants import CELL_SIZE, GRID_LINE_COLOR, HIGHLIGHT_COLOR, HIGHLIGHT_ALPHA, scale_pixmap, GRID_ROWS, GRID_COLUMNS, GRID_TILE_SELECTION_COLOR, SELECTION_BORDER_WIDTH, DRAG_PREVIEW_SIZE
 import json
 
@@ -110,15 +110,16 @@ class GridTile(QLabel):
                 for pos, tile in self.parent_canvas.dragged_tiles.items():
                     self.parent_canvas.tiles[pos] = tile
                     tile.show()
-            else:
-                # Drop succeeded, delete old tile widgets and clear selection
-                for tile in self.parent_canvas.dragged_tiles.values():
-                    tile.deleteLater()
+                self.parent_canvas.dragged_tiles = None
+            elif result == Qt.MoveAction:
+                # Drop succeeded
+                # Clear selection first
                 if self.viewer:
                     self.viewer.clear_grid_selection()
 
-            # Clear dragged tiles reference
-            self.parent_canvas.dragged_tiles = None
+                # DON'T delete tiles from here - let the canvas handle cleanup
+                # Schedule cleanup to happen from canvas, not from self
+                QTimer.singleShot(0, self.parent_canvas.cleanup_multi_drag)
 
         else:
             # Single tile drag
@@ -467,7 +468,7 @@ class InfiniteGridCanvas(QWidget):
                         break
 
                 if all_cells_available:
-                    # Place all images
+                    # Always create new tiles
                     for i, file_path in enumerate(file_paths):
                         current_grid_pos = (grid_x + i, grid_y)
                         tile = GridTile(file_path, self, self.viewer)
@@ -546,6 +547,16 @@ class InfiniteGridCanvas(QWidget):
             self.tiles[pos].deleteLater()
             del self.tiles[pos]
         self.update()
+
+    def cleanup_multi_drag(self):
+        """Clean up tiles after multi-tile drag completes"""
+        if self.dragged_tiles:
+            # Delete tiles that weren't reused
+            for tile in self.dragged_tiles.values():
+                # Check if tile was reused (still in self.tiles)
+                if tile not in self.tiles.values():
+                    tile.deleteLater()
+            self.dragged_tiles = None
 
     def set_grid_dimensions(self, rows, columns):
         """Update the grid dimensions"""

@@ -64,12 +64,8 @@ class ImageBankContainer(QWidget):
             if isinstance(data, dict) and "multi" in data:
                 # Multi-tile drop - add all back to bank
                 file_paths = data["multi"]
-                # Delete the dragged tile widgets from the canvas
-                if self.parent_viewer.canvas.dragged_tiles:
-                    for tile in self.parent_viewer.canvas.dragged_tiles.values():
-                        tile.deleteLater()
-                    self.parent_viewer.canvas.dragged_tiles = None
-                # Add all paths back to bank
+                # Note: Don't delete tiles here - let the drag source handle cleanup
+                # Just add paths back to bank
                 for file_path in file_paths:
                     self.parent_viewer.add_to_bank(file_path)
                 event.acceptProposedAction()
