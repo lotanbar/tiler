@@ -1,7 +1,8 @@
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QPushButton,
                                QLabel, QFileDialog, QScrollArea, QGridLayout,
-                               QDialog, QSplitter, QHBoxLayout, QSpinBox)
-from PySide6.QtCore import Qt
+                               QDialog, QSplitter, QHBoxLayout, QSpinBox, QApplication)
+from PySide6.QtCore import Qt, QRect, QPoint
+from PySide6.QtGui import QPainter, QPen, QColor
 import os
 
 from grid_canvas import InfiniteGridCanvas
@@ -14,6 +15,11 @@ class ImageBankContainer(QWidget):
         super().__init__()
         self.parent_viewer = parent_viewer
         self.setAcceptDrops(True)
+
+        # Marquee selection state
+        self.marquee_selecting = False
+        self.marquee_start_pos = None
+        self.marquee_current_pos = None
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasText():
@@ -40,6 +46,92 @@ class ImageBankContainer(QWidget):
                 self.parent_viewer.canvas.dragged_tile = None
             self.parent_viewer.add_to_bank(file_path)
             event.acceptProposedAction()
+
+    def paintEvent(self, event):
+        """Draw marquee selection rectangle"""
+        super().paintEvent(event)
+
+        if self.marquee_selecting and self.marquee_start_pos and self.marquee_current_pos:
+            painter = QPainter(self)
+            painter.setPen(QPen(QColor(74, 144, 226), 2, Qt.DashLine))
+            painter.setBrush(QColor(74, 144, 226, 40))
+
+            x1 = min(self.marquee_start_pos.x(), self.marquee_current_pos.x())
+            y1 = min(self.marquee_start_pos.y(), self.marquee_current_pos.y())
+            x2 = max(self.marquee_start_pos.x(), self.marquee_current_pos.x())
+            y2 = max(self.marquee_start_pos.y(), self.marquee_current_pos.y())
+
+            painter.drawRect(x1, y1, x2 - x1, y2 - y1)
+
+    def mousePressEvent(self, event):
+        """Handle left click for marquee selection"""
+        if event.button() == Qt.LeftButton:
+            # Check if clicking on an image label or empty space
+            widget_at_pos = self.childAt(event.pos())
+            if widget_at_pos is None or not isinstance(widget_at_pos, ClickableLabel):
+                # Clicking on empty space - start marquee selection
+                self.marquee_selecting = True
+                self.marquee_start_pos = event.pos()
+                self.marquee_current_pos = event.pos()
+                event.accept()
+            else:
+                super().mousePressEvent(event)
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        """Handle mouse move for marquee selection"""
+        if self.marquee_selecting:
+            # Update marquee rectangle
+            self.marquee_current_pos = event.pos()
+            self.update()
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """Handle marquee selection completion"""
+        if event.button() == Qt.LeftButton and self.marquee_selecting:
+            # Complete marquee selection
+            if self.marquee_start_pos and self.marquee_current_pos:
+                # Calculate marquee bounds
+                x1 = min(self.marquee_start_pos.x(), self.marquee_current_pos.x())
+                y1 = min(self.marquee_start_pos.y(), self.marquee_current_pos.y())
+                x2 = max(self.marquee_start_pos.x(), self.marquee_current_pos.x())
+                y2 = max(self.marquee_start_pos.y(), self.marquee_current_pos.y())
+                marquee_rect = QRect(x1, y1, x2 - x1, y2 - y1)
+
+                # Check modifiers
+                modifiers = QApplication.keyboardModifiers()
+                if modifiers != Qt.ShiftModifier:
+                    # Clear previous selection if not shift-clicking
+                    self.parent_viewer.clear_selection()
+
+                # Enter select mode if not already
+                if not self.parent_viewer.select_mode:
+                    self.parent_viewer.toggle_select_mode()
+
+                # Check each image label if it intersects with marquee
+                for file_path, label in self.parent_viewer.image_labels.items():
+                    # Get label's position in container coordinates
+                    label_rect = label.geometry()
+                    if marquee_rect.intersects(label_rect):
+                        if file_path not in self.parent_viewer.selected_paths:
+                            self.parent_viewer.selected_paths.add(file_path)
+                            label.set_selected(True)
+                            self.parent_viewer.last_selected_index = self.parent_viewer.image_paths.index(file_path)
+
+                self.parent_viewer.update_delete_button()
+                self.parent_viewer.update_select_all_button()
+
+            # Clear marquee state
+            self.marquee_selecting = False
+            self.marquee_start_pos = None
+            self.marquee_current_pos = None
+            self.update()
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
 
 class ImageViewer(QMainWindow):
     def __init__(self):
@@ -150,6 +242,7 @@ class ImageViewer(QMainWindow):
 
         # Grid tile selection tracking
         self.selected_grid_tiles = set()  # Set of grid positions (grid_x, grid_y)
+        self.last_selected_grid_pos = None  # For range selection
 
         # Development: Auto-load images from assets folder if it exists
         self.auto_load_assets()
@@ -182,6 +275,7 @@ class ImageViewer(QMainWindow):
     
     def clear_grid(self):
         """Clear all images from the canvas"""
+        self.clear_grid_selection()
         self.canvas.clear_all()
 
     def adjust_grid_size(self):
@@ -279,6 +373,53 @@ class ImageViewer(QMainWindow):
         self.selected_paths.clear()
         self.last_selected_index = None
         self.refresh_grid()
+
+    def toggle_grid_selection(self, grid_pos):
+        """Toggle selection of a grid tile"""
+        if grid_pos not in self.canvas.tiles:
+            return
+
+        tile = self.canvas.tiles[grid_pos]
+
+        if grid_pos in self.selected_grid_tiles:
+            self.selected_grid_tiles.remove(grid_pos)
+            tile.set_selected(False)
+        else:
+            self.selected_grid_tiles.add(grid_pos)
+            tile.set_selected(True)
+
+        self.last_selected_grid_pos = grid_pos
+
+    def select_grid_range(self, grid_pos):
+        """Select range of grid tiles from last selected to current"""
+        if self.last_selected_grid_pos is None:
+            self.toggle_grid_selection(grid_pos)
+            return
+
+        # Get all tile positions sorted by row then column
+        all_positions = sorted(self.canvas.tiles.keys(), key=lambda p: (p[1], p[0]))
+
+        try:
+            start_idx = all_positions.index(self.last_selected_grid_pos)
+            end_idx = all_positions.index(grid_pos)
+
+            # Select range
+            for i in range(min(start_idx, end_idx), max(start_idx, end_idx) + 1):
+                pos = all_positions[i]
+                if pos not in self.selected_grid_tiles:
+                    self.selected_grid_tiles.add(pos)
+                    self.canvas.tiles[pos].set_selected(True)
+        except ValueError:
+            # Position not found, just toggle current
+            self.toggle_grid_selection(grid_pos)
+
+    def clear_grid_selection(self):
+        """Clear all grid tile selections"""
+        for grid_pos in list(self.selected_grid_tiles):
+            if grid_pos in self.canvas.tiles:
+                self.canvas.tiles[grid_pos].set_selected(False)
+        self.selected_grid_tiles.clear()
+        self.last_selected_grid_pos = None
 
     def remove_from_bank(self, file_path):
         """Remove an image from the bank (e.g., when it's placed on the grid)"""

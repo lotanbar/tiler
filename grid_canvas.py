@@ -12,6 +12,7 @@ class GridTile(QLabel):
         self.parent_canvas = parent_canvas
         self.viewer = viewer
         self.drag_start_position = None
+        self.is_dragging = False
         self.selected = False
 
         self.update_pixmap()
@@ -36,6 +37,7 @@ class GridTile(QLabel):
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.drag_start_position = event.pos()
+            self.is_dragging = False
             self.raise_()  # Bring to front
         elif event.button() == Qt.RightButton:
             self.viewer.show_large_image(self.file_path)
@@ -45,7 +47,10 @@ class GridTile(QLabel):
             return
         if (event.pos() - self.drag_start_position).manhattanLength() < QApplication.startDragDistance():
             return
-        
+
+        # Mark that we're dragging
+        self.is_dragging = True
+
         # Start drag operation
         drag = QDrag(self)
         mime_data = QMimeData()
@@ -70,6 +75,21 @@ class GridTile(QLabel):
         # Clear the dragged tile reference
         self.parent_canvas.dragged_tile = None
 
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            modifiers = QApplication.keyboardModifiers()
+            # If plain click without drag and no modifiers
+            if not self.is_dragging:
+                # Get grid position of this tile
+                grid_pos = self.parent_canvas.get_grid_position(self.pos())
+
+                if modifiers == Qt.ShiftModifier:
+                    # Shift-click for range selection
+                    self.viewer.select_grid_range(grid_pos)
+                elif modifiers == Qt.NoModifier:
+                    # Plain click toggles selection
+                    self.viewer.toggle_grid_selection(grid_pos)
+
 class InfiniteGridCanvas(QWidget):
     """Infinite grid canvas for placing images"""
     def __init__(self, viewer=None):
@@ -93,6 +113,11 @@ class InfiniteGridCanvas(QWidget):
         self.pan_offset_y = 0
         self.middle_mouse_pressed = False
         self.last_pan_pos = None
+
+        # Marquee selection state
+        self.marquee_selecting = False
+        self.marquee_start_pos = None
+        self.marquee_current_pos = None
         
     def paintEvent(self, event):
         """Draw grid lines with zoom and pan transformations"""
@@ -141,7 +166,20 @@ class InfiniteGridCanvas(QWidget):
                     rect = QRect(grid_x * CELL_SIZE, grid_y * CELL_SIZE,
                                CELL_SIZE, CELL_SIZE)
                     painter.drawRect(rect)
-    
+
+        # Draw marquee selection rectangle (in screen coordinates)
+        if self.marquee_selecting and self.marquee_start_pos and self.marquee_current_pos:
+            painter.resetTransform()  # Draw in screen space
+            painter.setPen(QPen(QColor(74, 144, 226), 2, Qt.DashLine))
+            painter.setBrush(QColor(74, 144, 226, 40))
+
+            x1 = min(self.marquee_start_pos.x(), self.marquee_current_pos.x())
+            y1 = min(self.marquee_start_pos.y(), self.marquee_current_pos.y())
+            x2 = max(self.marquee_start_pos.x(), self.marquee_current_pos.x())
+            y2 = max(self.marquee_start_pos.y(), self.marquee_current_pos.y())
+
+            painter.drawRect(x1, y1, x2 - x1, y2 - y1)
+
     def wheelEvent(self, event):
         """Handle zoom with scroll wheel"""
         # Calculate zoom factor
@@ -173,17 +211,28 @@ class InfiniteGridCanvas(QWidget):
         event.accept()
 
     def mousePressEvent(self, event):
-        """Handle middle mouse button press for panning"""
+        """Handle middle mouse button press for panning and left click for marquee selection"""
         if event.button() == Qt.MiddleButton:
             self.middle_mouse_pressed = True
             self.last_pan_pos = event.pos()
             self.setCursor(Qt.ClosedHandCursor)
             event.accept()
+        elif event.button() == Qt.LeftButton:
+            # Check if clicking on a tile or empty space
+            widget_at_pos = self.childAt(event.pos())
+            if widget_at_pos is None or not isinstance(widget_at_pos, GridTile):
+                # Clicking on empty space - start marquee selection
+                self.marquee_selecting = True
+                self.marquee_start_pos = event.pos()
+                self.marquee_current_pos = event.pos()
+                event.accept()
+            else:
+                super().mousePressEvent(event)
         else:
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        """Handle mouse move for panning"""
+        """Handle mouse move for panning and marquee selection"""
         if self.middle_mouse_pressed and self.last_pan_pos:
             delta = event.pos() - self.last_pan_pos
             self.pan_offset_x += delta.x()
@@ -195,15 +244,51 @@ class InfiniteGridCanvas(QWidget):
 
             self.update()
             event.accept()
+        elif self.marquee_selecting:
+            # Update marquee rectangle
+            self.marquee_current_pos = event.pos()
+            self.update()
+            event.accept()
         else:
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        """Handle middle mouse button release"""
+        """Handle middle mouse button release and marquee selection completion"""
         if event.button() == Qt.MiddleButton:
             self.middle_mouse_pressed = False
             self.last_pan_pos = None
             self.setCursor(Qt.ArrowCursor)
+            event.accept()
+        elif event.button() == Qt.LeftButton and self.marquee_selecting:
+            # Complete marquee selection
+            if self.marquee_start_pos and self.marquee_current_pos:
+                # Calculate marquee bounds in screen coordinates
+                x1 = min(self.marquee_start_pos.x(), self.marquee_current_pos.x())
+                y1 = min(self.marquee_start_pos.y(), self.marquee_current_pos.y())
+                x2 = max(self.marquee_start_pos.x(), self.marquee_current_pos.x())
+                y2 = max(self.marquee_start_pos.y(), self.marquee_current_pos.y())
+                marquee_rect = QRect(x1, y1, x2 - x1, y2 - y1)
+
+                # Check each tile if it intersects with marquee
+                modifiers = QApplication.keyboardModifiers()
+                if modifiers != Qt.ShiftModifier:
+                    # Clear previous selection if not shift-clicking
+                    if self.viewer:
+                        self.viewer.clear_grid_selection()
+
+                for grid_pos, tile in self.tiles.items():
+                    # Get tile's screen position
+                    tile_rect = tile.geometry()
+                    if marquee_rect.intersects(tile_rect):
+                        if self.viewer:
+                            self.viewer.selected_grid_tiles.add(grid_pos)
+                            tile.set_selected(True)
+
+            # Clear marquee state
+            self.marquee_selecting = False
+            self.marquee_start_pos = None
+            self.marquee_current_pos = None
+            self.update()
             event.accept()
         else:
             super().mouseReleaseEvent(event)
@@ -384,6 +469,9 @@ class InfiniteGridCanvas(QWidget):
         positions_to_remove = [pos for pos, tile in self.tiles.items()
                               if tile.file_path == file_path]
         for pos in positions_to_remove:
+            # Clear selection if needed
+            if self.viewer and pos in self.viewer.selected_grid_tiles:
+                self.viewer.selected_grid_tiles.remove(pos)
             self.tiles[pos].deleteLater()
             del self.tiles[pos]
         self.update()
