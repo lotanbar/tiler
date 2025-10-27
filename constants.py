@@ -3,7 +3,7 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtCore import Qt
 
 # Size constants
-CELL_SIZE = 120
+CELL_SIZE = 60
 THUMBNAIL_WIDTH = 100
 LARGE_VIEW_WIDTH = 800
 DRAG_PREVIEW_SIZE = 100

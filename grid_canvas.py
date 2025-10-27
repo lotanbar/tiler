@@ -74,9 +74,6 @@ class InfiniteGridCanvas(QWidget):
         self.pan_offset_y = 0
         self.middle_mouse_pressed = False
         self.last_pan_pos = None
-
-        # Set minimum size for scrolling
-        self.setMinimumSize(2000, 2000)
         
     def paintEvent(self, event):
         """Draw grid lines with zoom and pan transformations"""
@@ -88,17 +85,23 @@ class InfiniteGridCanvas(QWidget):
 
         painter.setPen(QPen(QColor(*GRID_LINE_COLOR), 1))
 
-        # Calculate visible area in grid space
-        base_width = int(self.width() / self.zoom_scale)
-        base_height = int(self.height() / self.zoom_scale)
+        # Calculate visible area in grid space, accounting for pan offset
+        grid_start_x = int(-self.pan_offset_x / self.zoom_scale)
+        grid_start_y = int(-self.pan_offset_y / self.zoom_scale)
+        grid_end_x = int((self.width() - self.pan_offset_x) / self.zoom_scale)
+        grid_end_y = int((self.height() - self.pan_offset_y) / self.zoom_scale)
+
+        # Align to grid cell boundaries
+        grid_start_x = (grid_start_x // CELL_SIZE) * CELL_SIZE
+        grid_start_y = (grid_start_y // CELL_SIZE) * CELL_SIZE
 
         # Draw vertical lines
-        for x in range(0, base_width, CELL_SIZE):
-            painter.drawLine(x, 0, x, base_height)
+        for x in range(grid_start_x, grid_end_x + CELL_SIZE, CELL_SIZE):
+            painter.drawLine(x, grid_start_y, x, grid_end_y)
 
         # Draw horizontal lines
-        for y in range(0, base_height, CELL_SIZE):
-            painter.drawLine(0, y, base_width, y)
+        for y in range(grid_start_y, grid_end_y + CELL_SIZE, CELL_SIZE):
+            painter.drawLine(grid_start_x, y, grid_end_x, y)
 
         # Highlight cell during drag
         if self.highlight_cell:
@@ -133,11 +136,6 @@ class InfiniteGridCanvas(QWidget):
         mouse_pos = event.position()
         self.pan_offset_x = mouse_pos.x() - (mouse_pos.x() - self.pan_offset_x) * (new_zoom / old_zoom)
         self.pan_offset_y = mouse_pos.y() - (mouse_pos.y() - self.pan_offset_y) * (new_zoom / old_zoom)
-
-        # Update widget size based on zoom
-        base_size = 2000
-        new_size = int(base_size * self.zoom_scale)
-        self.setMinimumSize(new_size, new_size)
 
         # Update tile positions
         self.update_tile_positions()

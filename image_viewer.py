@@ -63,13 +63,9 @@ class ImageViewer(QMainWindow):
         top_layout = QVBoxLayout(top_widget)
         top_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Scrollable canvas for infinite grid
-        canvas_scroll = QScrollArea()
-        canvas_scroll.setWidgetResizable(False)  # Don't auto-resize, we want scrollbars
-        
+        # Infinite grid canvas (no scroll bars - use middle mouse to pan)
         self.canvas = InfiniteGridCanvas()
-        canvas_scroll.setWidget(self.canvas)
-        top_layout.addWidget(canvas_scroll)
+        top_layout.addWidget(self.canvas)
         
         # Bottom section with image bank
         bottom_widget = QWidget()
