@@ -1,9 +1,11 @@
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, 
                                QVBoxLayout, QPushButton, QLabel, 
-                               QFileDialog, QScrollArea, QGridLayout, QDialog)
+                               QFileDialog, QScrollArea, QGridLayout, 
+                               QDialog, QSplitter)
 from PySide6.QtGui import QPixmap
 from PySide6.QtCore import Qt
 import sys
+import os
 
 class ImageViewer(QMainWindow):
     def __init__(self):
@@ -11,39 +13,61 @@ class ImageViewer(QMainWindow):
         self.setWindowTitle("Image Bank")
         self.setGeometry(100, 100, 800, 600)
         
-        # Main widget and layout
+        # Main widget
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
-        layout = QVBoxLayout(main_widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        main_layout = QVBoxLayout(main_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         
-        # Import button
+        # Create splitter (allows resizing between top and bottom)
+        splitter = QSplitter(Qt.Vertical)
+        splitter.setHandleWidth(20)  # Make handle thicker (default is ~3-4px)
+        
+        # Top section with button
+        top_widget = QWidget()
+        top_layout = QVBoxLayout(top_widget)
         import_btn = QPushButton("Import Images")
         import_btn.clicked.connect(self.import_images)
-        layout.addWidget(import_btn)
+        top_layout.addWidget(import_btn)
+        top_layout.addStretch()  # Push button to top
         
-        # Scroll area for images at bottom
+        # Bottom section with image grid
+        bottom_widget = QWidget()
+        bottom_layout = QVBoxLayout(bottom_widget)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         
-        # Container for images (grid layout)
         self.image_container = QWidget()
         self.image_layout = QGridLayout(self.image_container)
-        self.image_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)  # Center horizontally, top align
-        self.image_layout.setSpacing(5)  # Reduce spacing between images
+        self.image_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        self.image_layout.setSpacing(5)
         self.scroll.setWidget(self.image_container)
         
-        layout.addWidget(self.scroll)
+        bottom_layout.addWidget(self.scroll)
         
-        self.image_paths = []  # Store all image paths
-        self.thumbnail_width = 150  # Thumbnail width in pixels
+        # Add widgets to splitter
+        splitter.addWidget(top_widget)
+        splitter.addWidget(bottom_widget)
+        
+        # Set initial sizes (top: 80%, bottom: 20%)
+        splitter.setSizes([480, 120])
+        
+        main_layout.addWidget(splitter)
+        
+        self.image_paths = []
+        self.thumbnail_width = 120
         
     def import_images(self):
+        # Get Desktop path
+        desktop_path = os.path.expanduser("~/Desktop")
+        
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "Select Images",
-            "",
+            desktop_path,  # Start in Desktop directory
             "Images (*.png *.jpg *.jpeg *.bmp *.gif)"
         )
         
@@ -78,7 +102,6 @@ class ImageViewer(QMainWindow):
             self.image_layout.addWidget(label, row, col)
     
     def resizeEvent(self, event):
-        # Called whenever window is resized
         super().resizeEvent(event)
         if self.image_paths:
             self.refresh_grid()
