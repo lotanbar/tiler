@@ -1,12 +1,12 @@
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QPushButton,
                                QLabel, QFileDialog, QScrollArea, QGridLayout,
-                               QDialog, QSplitter, QHBoxLayout)
+                               QDialog, QSplitter, QHBoxLayout, QSpinBox)
 from PySide6.QtCore import Qt
 import os
 
 from grid_canvas import InfiniteGridCanvas
 from image_bank import ClickableLabel
-from constants import THUMBNAIL_WIDTH, LARGE_VIEW_WIDTH, scale_pixmap
+from constants import THUMBNAIL_WIDTH, LARGE_VIEW_WIDTH, scale_pixmap, GRID_ROWS, GRID_COLUMNS
 
 class ImageBankContainer(QWidget):
     """Container widget for image bank that accepts drops"""
@@ -89,6 +89,8 @@ class ImageViewer(QMainWindow):
 
         # Buttons at the bottom
         button_row = QHBoxLayout()
+
+        # Left side buttons
         import_btn = QPushButton("Import Images")
         import_btn.clicked.connect(self.import_images)
         button_row.addWidget(import_btn)
@@ -108,6 +110,29 @@ class ImageViewer(QMainWindow):
         button_row.addWidget(self.delete_btn)
 
         button_row.addStretch()
+
+        # Grid controls on the right
+        button_row.addWidget(QLabel("Grid Size:"))
+        button_row.addWidget(QLabel("Rows:"))
+        self.rows_input = QSpinBox()
+        self.rows_input.setMinimum(1)
+        self.rows_input.setMaximum(100)
+        self.rows_input.setValue(GRID_ROWS)
+        self.rows_input.setFixedWidth(60)
+        button_row.addWidget(self.rows_input)
+
+        button_row.addWidget(QLabel("Columns:"))
+        self.columns_input = QSpinBox()
+        self.columns_input.setMinimum(1)
+        self.columns_input.setMaximum(100)
+        self.columns_input.setValue(GRID_COLUMNS)
+        self.columns_input.setFixedWidth(60)
+        button_row.addWidget(self.columns_input)
+
+        self.adjust_grid_btn = QPushButton("Adjust Grid")
+        self.adjust_grid_btn.clicked.connect(self.adjust_grid_size)
+        button_row.addWidget(self.adjust_grid_btn)
+
         bottom_layout.addLayout(button_row)
 
         # Add widgets to splitter
@@ -140,6 +165,12 @@ class ImageViewer(QMainWindow):
     def clear_grid(self):
         """Clear all images from the canvas"""
         self.canvas.clear_all()
+
+    def adjust_grid_size(self):
+        """Adjust the grid size based on input values"""
+        rows = self.rows_input.value()
+        columns = self.columns_input.value()
+        self.canvas.set_grid_dimensions(rows, columns)
 
     def toggle_select_mode(self):
         """Toggle between select mode and view mode"""

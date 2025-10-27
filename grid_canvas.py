@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import QWidget, QLabel, QApplication
 from PySide6.QtGui import QPainter, QPen, QColor, QDrag
 from PySide6.QtCore import Qt, QMimeData, QPoint, QRect
-from constants import CELL_SIZE, GRID_LINE_COLOR, HIGHLIGHT_COLOR, HIGHLIGHT_ALPHA, scale_pixmap
+from constants import CELL_SIZE, GRID_LINE_COLOR, HIGHLIGHT_COLOR, HIGHLIGHT_ALPHA, scale_pixmap, GRID_ROWS, GRID_COLUMNS
 
 class GridTile(QLabel):
     """Tile that can be placed on grid and moved"""
@@ -66,6 +66,10 @@ class InfiniteGridCanvas(QWidget):
         self.tiles = {}  # Dictionary: (grid_x, grid_y) -> GridTile
         self.dragged_tile = None  # Track tile being dragged for reuse
 
+        # Grid dimensions
+        self.grid_rows = GRID_ROWS
+        self.grid_columns = GRID_COLUMNS
+
         # Zoom and pan state
         self.zoom_scale = 1.0
         self.MIN_ZOOM = 0.25  # Can zoom out to 25% - see whole grid
@@ -85,23 +89,31 @@ class InfiniteGridCanvas(QWidget):
 
         painter.setPen(QPen(QColor(*GRID_LINE_COLOR), 1))
 
+        # Calculate grid boundaries
+        max_grid_x = self.grid_columns * CELL_SIZE
+        max_grid_y = self.grid_rows * CELL_SIZE
+
         # Calculate visible area in grid space, accounting for pan offset
         grid_start_x = int(-self.pan_offset_x / self.zoom_scale)
         grid_start_y = int(-self.pan_offset_y / self.zoom_scale)
         grid_end_x = int((self.width() - self.pan_offset_x) / self.zoom_scale)
         grid_end_y = int((self.height() - self.pan_offset_y) / self.zoom_scale)
 
-        # Align to grid cell boundaries
-        grid_start_x = (grid_start_x // CELL_SIZE) * CELL_SIZE
-        grid_start_y = (grid_start_y // CELL_SIZE) * CELL_SIZE
+        # Clamp to grid boundaries
+        grid_start_x = max(0, (grid_start_x // CELL_SIZE) * CELL_SIZE)
+        grid_start_y = max(0, (grid_start_y // CELL_SIZE) * CELL_SIZE)
+        grid_end_x = min(max_grid_x, grid_end_x)
+        grid_end_y = min(max_grid_y, grid_end_y)
 
         # Draw vertical lines
         for x in range(grid_start_x, grid_end_x + CELL_SIZE, CELL_SIZE):
-            painter.drawLine(x, grid_start_y, x, grid_end_y)
+            if x <= max_grid_x:
+                painter.drawLine(x, grid_start_y, x, grid_end_y)
 
         # Draw horizontal lines
         for y in range(grid_start_y, grid_end_y + CELL_SIZE, CELL_SIZE):
-            painter.drawLine(grid_start_x, y, grid_end_x, y)
+            if y <= max_grid_y:
+                painter.drawLine(grid_start_x, y, grid_end_x, y)
 
         # Highlight cell during drag
         if self.highlight_cell:
@@ -210,13 +222,16 @@ class InfiniteGridCanvas(QWidget):
     def dragMoveEvent(self, event):
         # Calculate which cell the mouse is over
         grid_pos = self.get_grid_position(event.position().toPoint())
-        
-        # Only highlight if cell is empty
-        if grid_pos not in self.tiles:
+        grid_x, grid_y = grid_pos
+
+        # Only highlight if cell is empty and within bounds
+        if (0 <= grid_x < self.grid_columns and
+            0 <= grid_y < self.grid_rows and
+            grid_pos not in self.tiles):
             self.highlight_cell = grid_pos
         else:
             self.highlight_cell = None
-        
+
         self.update()  # Trigger repaint
         event.acceptProposedAction()
     
@@ -226,9 +241,12 @@ class InfiniteGridCanvas(QWidget):
     
     def dropEvent(self, event):
         grid_pos = self.get_grid_position(event.position().toPoint())
+        grid_x, grid_y = grid_pos
 
-        # Only drop if cell is empty
-        if grid_pos not in self.tiles:
+        # Only drop if cell is empty and within bounds
+        if (0 <= grid_x < self.grid_columns and
+            0 <= grid_y < self.grid_rows and
+            grid_pos not in self.tiles):
             mime_text = event.mimeData().text()
 
             # Check if it's a tile being moved or new image from bank
@@ -278,6 +296,18 @@ class InfiniteGridCanvas(QWidget):
         """Remove all tiles with the given file path"""
         positions_to_remove = [pos for pos, tile in self.tiles.items()
                               if tile.file_path == file_path]
+        for pos in positions_to_remove:
+            self.tiles[pos].deleteLater()
+            del self.tiles[pos]
+        self.update()
+
+    def set_grid_dimensions(self, rows, columns):
+        """Update the grid dimensions"""
+        self.grid_rows = rows
+        self.grid_columns = columns
+        # Remove tiles that are now outside the bounds
+        positions_to_remove = [pos for pos in self.tiles.keys()
+                              if pos[0] >= columns or pos[1] >= rows]
         for pos in positions_to_remove:
             self.tiles[pos].deleteLater()
             del self.tiles[pos]
