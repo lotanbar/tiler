@@ -44,12 +44,18 @@ class GridTile(QLabel):
         drag.setPixmap(preview_pixmap)
         drag.setHotSpot(preview_pixmap.rect().center())
 
-        # Remove this tile from canvas during drag
+        # Store reference to this tile and remove from canvas during drag
+        self.parent_canvas.dragged_tile = self
         self.parent_canvas.remove_tile_at_position(self.pos())
-        
-        if drag.exec(Qt.MoveAction) == Qt.IgnoreAction:
+
+        result = drag.exec(Qt.MoveAction)
+
+        if result == Qt.IgnoreAction:
             # Drag cancelled, restore tile
             self.parent_canvas.add_tile_at_position(self, self.pos())
+
+        # Clear the dragged tile reference
+        self.parent_canvas.dragged_tile = None
 
 class InfiniteGridCanvas(QWidget):
     """Infinite grid canvas for placing images"""
@@ -58,6 +64,7 @@ class InfiniteGridCanvas(QWidget):
         self.setAcceptDrops(True)
         self.highlight_cell = None  # Cell to highlight during drag
         self.tiles = {}  # Dictionary: (grid_x, grid_y) -> GridTile
+        self.dragged_tile = None  # Track tile being dragged for reuse
 
         # Zoom and pan state
         self.zoom_scale = 1.0
@@ -221,26 +228,31 @@ class InfiniteGridCanvas(QWidget):
     
     def dropEvent(self, event):
         grid_pos = self.get_grid_position(event.position().toPoint())
-        
+
         # Only drop if cell is empty
         if grid_pos not in self.tiles:
             mime_text = event.mimeData().text()
-            
+
             # Check if it's a tile being moved or new image from bank
             if mime_text.startswith("TILE:"):
-                file_path = mime_text[5:]  # Remove "TILE:" prefix
+                # Reuse the existing tile that's being moved
+                if self.dragged_tile:
+                    tile = self.dragged_tile
+                    pixel_pos = self.get_pixel_position(grid_pos)
+                    tile.move(pixel_pos)
+                    tile.show()
+                    self.tiles[grid_pos] = tile
+                    event.acceptProposedAction()
             else:
+                # New image from bank - create new tile
                 file_path = mime_text
-            
-            # Create new tile at this position
-            tile = GridTile(file_path, self)
-            pixel_pos = self.get_pixel_position(grid_pos)
-            tile.move(pixel_pos)
-            tile.show()
-            
-            self.tiles[grid_pos] = tile
-            event.acceptProposedAction()
-        
+                tile = GridTile(file_path, self)
+                pixel_pos = self.get_pixel_position(grid_pos)
+                tile.move(pixel_pos)
+                tile.show()
+                self.tiles[grid_pos] = tile
+                event.acceptProposedAction()
+
         self.highlight_cell = None
         self.update()
     

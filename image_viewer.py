@@ -8,6 +8,39 @@ from grid_canvas import InfiniteGridCanvas
 from image_bank import ClickableLabel
 from constants import THUMBNAIL_WIDTH, LARGE_VIEW_WIDTH, scale_pixmap
 
+class ImageBankContainer(QWidget):
+    """Container widget for image bank that accepts drops"""
+    def __init__(self, parent_viewer):
+        super().__init__()
+        self.parent_viewer = parent_viewer
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasText():
+            mime_text = event.mimeData().text()
+            # Only accept tiles being moved from grid
+            if mime_text.startswith("TILE:"):
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasText():
+            mime_text = event.mimeData().text()
+            if mime_text.startswith("TILE:"):
+                event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        mime_text = event.mimeData().text()
+        if mime_text.startswith("TILE:"):
+            file_path = mime_text[5:]  # Remove "TILE:" prefix
+            # Delete the dragged tile widget from the canvas
+            if self.parent_viewer.canvas.dragged_tile:
+                self.parent_viewer.canvas.dragged_tile.deleteLater()
+                self.parent_viewer.canvas.dragged_tile = None
+            self.parent_viewer.add_to_bank(file_path)
+            event.acceptProposedAction()
+
 class ImageViewer(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -43,14 +76,14 @@ class ImageViewer(QMainWindow):
         bottom_layout = QVBoxLayout(bottom_widget)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         
-        bank_label = QLabel("Image Bank (Drag images to grid above)")
+        bank_label = QLabel("Image Bank (Drag images to/from grid above)")
         bank_label.setStyleSheet("padding: 5px; background-color: #e0e0e0; font-weight: bold;")
         bottom_layout.addWidget(bank_label)
         
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
-        
-        self.image_container = QWidget()
+
+        self.image_container = ImageBankContainer(self)
         self.image_layout = QGridLayout(self.image_container)
         self.image_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
         self.image_layout.setSpacing(5)
@@ -200,6 +233,20 @@ class ImageViewer(QMainWindow):
 
         self.selected_paths.clear()
         self.last_selected_index = None
+        self.refresh_grid()
+
+    def remove_from_bank(self, file_path):
+        """Remove an image from the bank (e.g., when it's placed on the grid)"""
+        if file_path in self.image_paths:
+            self.image_paths.remove(file_path)
+        if file_path in self.selected_paths:
+            self.selected_paths.remove(file_path)
+        self.refresh_grid()
+
+    def add_to_bank(self, file_path):
+        """Add an image back to the bank (e.g., when returned from grid)"""
+        if file_path not in self.image_paths:
+            self.image_paths.append(file_path)
         self.refresh_grid()
     
     def refresh_grid(self):

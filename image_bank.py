@@ -45,7 +45,10 @@ class ClickableLabel(QLabel):
         drag.setPixmap(preview_pixmap)
         drag.setHotSpot(preview_pixmap.rect().center())
 
-        drag.exec(Qt.CopyAction)
+        result = drag.exec(Qt.MoveAction)
+        # If drop was successful, remove from bank
+        if result == Qt.MoveAction:
+            self.parent_viewer.remove_from_bank(self.file_path)
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
