@@ -1,16 +1,18 @@
 from PySide6.QtWidgets import QWidget, QLabel, QApplication
 from PySide6.QtGui import QPainter, QPen, QColor, QDrag
 from PySide6.QtCore import Qt, QMimeData, QPoint, QRect
-from constants import CELL_SIZE, GRID_LINE_COLOR, HIGHLIGHT_COLOR, HIGHLIGHT_ALPHA, scale_pixmap, GRID_ROWS, GRID_COLUMNS
+from constants import CELL_SIZE, GRID_LINE_COLOR, HIGHLIGHT_COLOR, HIGHLIGHT_ALPHA, scale_pixmap, GRID_ROWS, GRID_COLUMNS, GRID_TILE_SELECTION_COLOR, SELECTION_BORDER_WIDTH
 import json
 
 class GridTile(QLabel):
     """Tile that can be placed on grid and moved"""
-    def __init__(self, file_path, parent_canvas):
+    def __init__(self, file_path, parent_canvas, viewer):
         super().__init__(parent_canvas)
         self.file_path = file_path
         self.parent_canvas = parent_canvas
+        self.viewer = viewer
         self.drag_start_position = None
+        self.selected = False
 
         self.update_pixmap()
         self.setAlignment(Qt.AlignCenter)
@@ -22,11 +24,21 @@ class GridTile(QLabel):
         pixmap = scale_pixmap(self.file_path, scaled_size, keep_aspect=False)
         self.setPixmap(pixmap)
         self.setFixedSize(scaled_size, scaled_size)
-        
+
+    def set_selected(self, selected):
+        """Set selection state and update visual styling"""
+        self.selected = selected
+        if selected:
+            self.setStyleSheet(f"background-color: white; border: {SELECTION_BORDER_WIDTH}px solid {GRID_TILE_SELECTION_COLOR};")
+        else:
+            self.setStyleSheet("background-color: white;")
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.drag_start_position = event.pos()
             self.raise_()  # Bring to front
+        elif event.button() == Qt.RightButton:
+            self.viewer.show_large_image(self.file_path)
     
     def mouseMoveEvent(self, event):
         if not (event.buttons() & Qt.LeftButton):
@@ -60,8 +72,9 @@ class GridTile(QLabel):
 
 class InfiniteGridCanvas(QWidget):
     """Infinite grid canvas for placing images"""
-    def __init__(self):
+    def __init__(self, viewer=None):
         super().__init__()
+        self.viewer = viewer  # Reference to parent ImageViewer
         self.setAcceptDrops(True)
         self.highlight_cell = None  # Cell to highlight during drag
         self.highlight_cells = []  # Multiple cells to highlight for multi-image drag
@@ -301,7 +314,7 @@ class InfiniteGridCanvas(QWidget):
                     # Place all images
                     for i, file_path in enumerate(file_paths):
                         current_grid_pos = (grid_x + i, grid_y)
-                        tile = GridTile(file_path, self)
+                        tile = GridTile(file_path, self, self.viewer)
                         pixel_pos = self.get_pixel_position(current_grid_pos)
                         tile.move(pixel_pos)
                         tile.show()
@@ -335,7 +348,7 @@ class InfiniteGridCanvas(QWidget):
             else:
                 # New image from bank - create new tile
                 file_path = mime_text
-                tile = GridTile(file_path, self)
+                tile = GridTile(file_path, self, self.viewer)
                 pixel_pos = self.get_pixel_position(grid_pos)
                 tile.move(pixel_pos)
                 tile.show()

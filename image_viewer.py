@@ -64,7 +64,7 @@ class ImageViewer(QMainWindow):
         top_layout.setContentsMargins(0, 0, 0, 0)
 
         # Infinite grid canvas (no scroll bars - use middle mouse to pan)
-        self.canvas = InfiniteGridCanvas()
+        self.canvas = InfiniteGridCanvas(viewer=self)
         top_layout.addWidget(self.canvas)
         
         # Bottom section with image bank
@@ -147,7 +147,25 @@ class ImageViewer(QMainWindow):
         self.last_selected_index = None
         self.image_labels = {}
         self.select_mode = False
-        
+
+        # Grid tile selection tracking
+        self.selected_grid_tiles = set()  # Set of grid positions (grid_x, grid_y)
+
+        # Development: Auto-load images from assets folder if it exists
+        self.auto_load_assets()
+
+    def auto_load_assets(self):
+        """Auto-load images from assets folder for development"""
+        assets_path = os.path.join(os.path.dirname(__file__), "assets")
+        if os.path.exists(assets_path) and os.path.isdir(assets_path):
+            image_files = [os.path.join(assets_path, f) for f in os.listdir(assets_path)
+                          if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif'))]
+            if image_files:
+                # Sort to maintain consistent order
+                image_files.sort()
+                self.image_paths.extend(image_files)
+                self.refresh_grid()
+
     def import_images(self):
         desktop_path = os.path.expanduser("~/Desktop")
         
