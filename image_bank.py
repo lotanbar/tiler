@@ -11,18 +11,17 @@ class ClickableLabel(QLabel):
         self.parent_viewer = parent_viewer
         self.selected = False
         self.drag_start_position = None
-        
+        self.is_dragging = False
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.drag_start_position = event.pos()
+            self.is_dragging = False
             modifiers = QApplication.keyboardModifiers()
-            
+
             if modifiers == Qt.ShiftModifier:
                 self.parent_viewer.select_range(self.file_path)
-            elif modifiers == Qt.ControlModifier:
-                self.parent_viewer.toggle_selection(self.file_path)
-            else:
-                self.parent_viewer.select_single(self.file_path)
+            # For plain click, we'll handle it in mouseReleaseEvent to distinguish from drag
         elif event.button() == Qt.RightButton:
             self.parent_viewer.show_large_image(self.file_path)
     
@@ -31,7 +30,10 @@ class ClickableLabel(QLabel):
             return
         if (event.pos() - self.drag_start_position).manhattanLength() < QApplication.startDragDistance():
             return
-        
+
+        # Mark that we're dragging
+        self.is_dragging = True
+
         # Start drag operation
         drag = QDrag(self)
         mime_data = QMimeData()
@@ -44,7 +46,17 @@ class ClickableLabel(QLabel):
         drag.setHotSpot(preview_pixmap.rect().center())
 
         drag.exec(Qt.CopyAction)
-    
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            modifiers = QApplication.keyboardModifiers()
+            # If plain click without drag and no modifiers
+            if not self.is_dragging and modifiers == Qt.NoModifier:
+                # Left click enters select mode and toggles selection
+                if not self.parent_viewer.select_mode:
+                    self.parent_viewer.toggle_select_mode()
+                self.parent_viewer.toggle_selection(self.file_path)
+
     def set_selected(self, selected):
         self.selected = selected
         if selected:

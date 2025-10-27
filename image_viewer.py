@@ -29,25 +29,7 @@ class ImageViewer(QMainWindow):
         top_widget = QWidget()
         top_layout = QVBoxLayout(top_widget)
         top_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Buttons
-        button_row = QHBoxLayout()
-        import_btn = QPushButton("Import Images")
-        import_btn.clicked.connect(self.import_images)
-        button_row.addWidget(import_btn)
-        
-        clear_grid_btn = QPushButton("Clear Grid")
-        clear_grid_btn.clicked.connect(self.clear_grid)
-        button_row.addWidget(clear_grid_btn)
-        
-        self.delete_btn = QPushButton("Delete Selected")
-        self.delete_btn.clicked.connect(self.delete_selected)
-        self.delete_btn.setVisible(False)
-        button_row.addWidget(self.delete_btn)
-        
-        button_row.addStretch()
-        top_layout.addLayout(button_row)
-        
+
         # Scrollable canvas for infinite grid
         canvas_scroll = QScrollArea()
         canvas_scroll.setWidgetResizable(False)  # Don't auto-resize, we want scrollbars
@@ -73,9 +55,32 @@ class ImageViewer(QMainWindow):
         self.image_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
         self.image_layout.setSpacing(5)
         self.scroll.setWidget(self.image_container)
-        
+
         bottom_layout.addWidget(self.scroll)
-        
+
+        # Buttons at the bottom
+        button_row = QHBoxLayout()
+        import_btn = QPushButton("Import Images")
+        import_btn.clicked.connect(self.import_images)
+        button_row.addWidget(import_btn)
+
+        clear_grid_btn = QPushButton("Clear Grid")
+        clear_grid_btn.clicked.connect(self.clear_grid)
+        button_row.addWidget(clear_grid_btn)
+
+        self.select_all_btn = QPushButton("Select All")
+        self.select_all_btn.clicked.connect(self.toggle_select_all)
+        self.select_all_btn.setVisible(False)  # Hidden until select mode is on
+        button_row.addWidget(self.select_all_btn)
+
+        self.delete_btn = QPushButton("Delete Selected")
+        self.delete_btn.clicked.connect(self.delete_selected)
+        self.delete_btn.setVisible(False)
+        button_row.addWidget(self.delete_btn)
+
+        button_row.addStretch()
+        bottom_layout.addLayout(button_row)
+
         # Add widgets to splitter
         splitter.addWidget(top_widget)
         splitter.addWidget(bottom_widget)
@@ -87,6 +92,7 @@ class ImageViewer(QMainWindow):
         self.selected_paths = set()
         self.last_selected_index = None
         self.image_labels = {}
+        self.select_mode = False
         
     def import_images(self):
         desktop_path = os.path.expanduser("~/Desktop")
@@ -105,6 +111,17 @@ class ImageViewer(QMainWindow):
     def clear_grid(self):
         """Clear all images from the canvas"""
         self.canvas.clear_all()
+
+    def toggle_select_mode(self):
+        """Toggle between select mode and view mode"""
+        self.select_mode = not self.select_mode
+        if self.select_mode:
+            self.select_all_btn.setVisible(True)
+            self.update_select_all_button()
+        else:
+            self.select_all_btn.setVisible(False)
+            # Clear selection when exiting select mode
+            self.clear_selection()
     
     def select_single(self, file_path):
         self.clear_selection()
@@ -112,6 +129,7 @@ class ImageViewer(QMainWindow):
         self.image_labels[file_path].set_selected(True)
         self.last_selected_index = self.image_paths.index(file_path)
         self.update_delete_button()
+        self.update_select_all_button()
     
     def toggle_selection(self, file_path):
         if file_path in self.selected_paths:
@@ -122,22 +140,24 @@ class ImageViewer(QMainWindow):
             self.image_labels[file_path].set_selected(True)
         self.last_selected_index = self.image_paths.index(file_path)
         self.update_delete_button()
+        self.update_select_all_button()
     
     def select_range(self, file_path):
         if self.last_selected_index is None:
             self.select_single(file_path)
             return
-        
+
         current_index = self.image_paths.index(file_path)
         start = min(self.last_selected_index, current_index)
         end = max(self.last_selected_index, current_index)
-        
+
         for i in range(start, end + 1):
             path = self.image_paths[i]
             self.selected_paths.add(path)
             self.image_labels[path].set_selected(True)
-        
+
         self.update_delete_button()
+        self.update_select_all_button()
     
     def clear_selection(self):
         for path in self.selected_paths:
@@ -145,6 +165,28 @@ class ImageViewer(QMainWindow):
                 self.image_labels[path].set_selected(False)
         self.selected_paths.clear()
         self.update_delete_button()
+        self.update_select_all_button()
+
+    def toggle_select_all(self):
+        """Toggle between selecting all and deselecting all images"""
+        if len(self.selected_paths) == len(self.image_paths) and len(self.image_paths) > 0:
+            # All are selected, so deselect all
+            self.clear_selection()
+        else:
+            # Not all are selected, so select all
+            for path in self.image_paths:
+                self.selected_paths.add(path)
+                if path in self.image_labels:
+                    self.image_labels[path].set_selected(True)
+            self.update_delete_button()
+            self.update_select_all_button()
+
+    def update_select_all_button(self):
+        """Update the Select All button text based on current selection"""
+        if len(self.selected_paths) == len(self.image_paths) and len(self.image_paths) > 0:
+            self.select_all_btn.setText("Deselect All")
+        else:
+            self.select_all_btn.setText("Select All")
     
     def update_delete_button(self):
         self.delete_btn.setVisible(len(self.selected_paths) > 0)
@@ -164,9 +206,9 @@ class ImageViewer(QMainWindow):
         # Clear existing grid
         for i in reversed(range(self.image_layout.count())):
             self.image_layout.itemAt(i).widget().setParent(None)
-        
+
         self.image_labels.clear()
-        
+
         # Calculate columns based on current width
         available_width = self.scroll.viewport().width()
         images_per_row = max(1, available_width // (THUMBNAIL_WIDTH + 10))
@@ -177,18 +219,19 @@ class ImageViewer(QMainWindow):
             pixmap = scale_pixmap(file_path, THUMBNAIL_WIDTH)
             label.setPixmap(pixmap)
             label.setCursor(Qt.PointingHandCursor)
-            
+
             if file_path in self.selected_paths:
                 label.set_selected(True)
-            
+
             self.image_labels[file_path] = label
-            
+
             row = index // images_per_row
             col = index % images_per_row
-            
+
             self.image_layout.addWidget(label, row, col)
-        
+
         self.update_delete_button()
+        self.update_select_all_button()
     
     def resizeEvent(self, event):
         super().resizeEvent(event)
