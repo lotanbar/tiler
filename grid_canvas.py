@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import QWidget, QLabel, QApplication
-from PySide6.QtGui import QPainter, QPen, QColor, QDrag
+from PySide6.QtGui import QPainter, QPen, QColor, QDrag, QFont
 from PySide6.QtCore import Qt, QMimeData, QPoint, QRect
-from constants import CELL_SIZE, GRID_LINE_COLOR, HIGHLIGHT_COLOR, HIGHLIGHT_ALPHA, scale_pixmap, GRID_ROWS, GRID_COLUMNS, GRID_TILE_SELECTION_COLOR, SELECTION_BORDER_WIDTH
+from constants import CELL_SIZE, GRID_LINE_COLOR, HIGHLIGHT_COLOR, HIGHLIGHT_ALPHA, scale_pixmap, GRID_ROWS, GRID_COLUMNS, GRID_TILE_SELECTION_COLOR, SELECTION_BORDER_WIDTH, DRAG_PREVIEW_SIZE
 import json
 
 class GridTile(QLabel):
@@ -51,29 +51,99 @@ class GridTile(QLabel):
         # Mark that we're dragging
         self.is_dragging = True
 
-        # Start drag operation
-        drag = QDrag(self)
-        mime_data = QMimeData()
-        mime_data.setText(f"TILE:{self.file_path}")
-        drag.setMimeData(mime_data)
+        # Get grid position of this tile
+        grid_pos = self.parent_canvas.get_grid_position(self.pos())
 
-        # Set drag preview
-        preview_pixmap = scale_pixmap(self.file_path, CELL_SIZE, keep_aspect=False)
-        drag.setPixmap(preview_pixmap)
-        drag.setHotSpot(preview_pixmap.rect().center())
+        # Check if dragging multiple selected tiles
+        if (self.viewer and
+            grid_pos in self.viewer.selected_grid_tiles and
+            len(self.viewer.selected_grid_tiles) > 1):
 
-        # Store reference to this tile and remove from canvas during drag
-        self.parent_canvas.dragged_tile = self
-        self.parent_canvas.remove_tile_at_position(self.pos())
+            # Multi-tile drag - get all selected tiles sorted by position (row, col)
+            selected_positions = sorted(list(self.viewer.selected_grid_tiles),
+                                       key=lambda p: (p[1], p[0]))  # Sort by row, then column
+            selected_paths = [self.parent_canvas.tiles[pos].file_path
+                            for pos in selected_positions]
 
-        result = drag.exec(Qt.MoveAction)
+            # Start drag operation
+            drag = QDrag(self)
+            mime_data = QMimeData()
+            mime_data.setText(json.dumps({"multi": selected_paths}))
+            drag.setMimeData(mime_data)
 
-        if result == Qt.IgnoreAction:
-            # Drag cancelled, restore tile
-            self.parent_canvas.add_tile_at_position(self, self.pos())
+            # Set drag preview with count indicator
+            preview_pixmap = scale_pixmap(self.file_path, DRAG_PREVIEW_SIZE, keep_aspect=False)
+            painter = QPainter(preview_pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
 
-        # Clear the dragged tile reference
-        self.parent_canvas.dragged_tile = None
+            # Draw badge background
+            badge_size = 30
+            painter.setBrush(Qt.red)
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(preview_pixmap.width() - badge_size, 0, badge_size, badge_size)
+
+            # Draw count text
+            painter.setPen(Qt.white)
+            font = QFont()
+            font.setPointSize(12)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(preview_pixmap.width() - badge_size, 0, badge_size, badge_size,
+                           Qt.AlignCenter, str(len(selected_paths)))
+            painter.end()
+
+            drag.setPixmap(preview_pixmap)
+            drag.setHotSpot(preview_pixmap.rect().center())
+
+            # Store tiles and remove all selected tiles during drag
+            self.parent_canvas.dragged_tiles = {}  # Map: grid_pos -> tile
+            for pos in selected_positions:
+                tile = self.parent_canvas.tiles[pos]
+                self.parent_canvas.dragged_tiles[pos] = tile
+                tile.hide()
+                del self.parent_canvas.tiles[pos]
+
+            result = drag.exec(Qt.MoveAction)
+
+            # If drag cancelled, restore all tiles
+            if result == Qt.IgnoreAction:
+                for pos, tile in self.parent_canvas.dragged_tiles.items():
+                    self.parent_canvas.tiles[pos] = tile
+                    tile.show()
+            else:
+                # Drop succeeded, delete old tile widgets and clear selection
+                for tile in self.parent_canvas.dragged_tiles.values():
+                    tile.deleteLater()
+                if self.viewer:
+                    self.viewer.clear_grid_selection()
+
+            # Clear dragged tiles reference
+            self.parent_canvas.dragged_tiles = None
+
+        else:
+            # Single tile drag
+            drag = QDrag(self)
+            mime_data = QMimeData()
+            mime_data.setText(f"TILE:{self.file_path}")
+            drag.setMimeData(mime_data)
+
+            # Set drag preview
+            preview_pixmap = scale_pixmap(self.file_path, CELL_SIZE, keep_aspect=False)
+            drag.setPixmap(preview_pixmap)
+            drag.setHotSpot(preview_pixmap.rect().center())
+
+            # Store reference to this tile and remove from canvas during drag
+            self.parent_canvas.dragged_tile = self
+            self.parent_canvas.remove_tile_at_position(self.pos())
+
+            result = drag.exec(Qt.MoveAction)
+
+            if result == Qt.IgnoreAction:
+                # Drag cancelled, restore tile
+                self.parent_canvas.add_tile_at_position(self, self.pos())
+
+            # Clear the dragged tile reference
+            self.parent_canvas.dragged_tile = None
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -99,7 +169,8 @@ class InfiniteGridCanvas(QWidget):
         self.highlight_cell = None  # Cell to highlight during drag
         self.highlight_cells = []  # Multiple cells to highlight for multi-image drag
         self.tiles = {}  # Dictionary: (grid_x, grid_y) -> GridTile
-        self.dragged_tile = None  # Track tile being dragged for reuse
+        self.dragged_tile = None  # Track single tile being dragged for reuse
+        self.dragged_tiles = None  # Track multiple tiles being dragged (dict: grid_pos -> tile)
 
         # Grid dimensions
         self.grid_rows = GRID_ROWS

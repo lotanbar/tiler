@@ -24,20 +24,60 @@ class ImageBankContainer(QWidget):
     def dragEnterEvent(self, event):
         if event.mimeData().hasText():
             mime_text = event.mimeData().text()
-            # Only accept tiles being moved from grid
+            # Accept tiles being moved from grid (single or multi)
             if mime_text.startswith("TILE:"):
                 event.acceptProposedAction()
             else:
-                event.ignore()
+                # Check for multi-tile JSON
+                try:
+                    import json
+                    data = json.loads(mime_text)
+                    if isinstance(data, dict) and "multi" in data:
+                        event.acceptProposedAction()
+                    else:
+                        event.ignore()
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    event.ignore()
 
     def dragMoveEvent(self, event):
         if event.mimeData().hasText():
             mime_text = event.mimeData().text()
             if mime_text.startswith("TILE:"):
                 event.acceptProposedAction()
+            else:
+                # Check for multi-tile JSON
+                try:
+                    import json
+                    data = json.loads(mime_text)
+                    if isinstance(data, dict) and "multi" in data:
+                        event.acceptProposedAction()
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    pass
 
     def dropEvent(self, event):
         mime_text = event.mimeData().text()
+
+        # Check if it's a multi-tile drop from grid
+        try:
+            import json
+            data = json.loads(mime_text)
+            if isinstance(data, dict) and "multi" in data:
+                # Multi-tile drop - add all back to bank
+                file_paths = data["multi"]
+                # Delete the dragged tile widgets from the canvas
+                if self.parent_viewer.canvas.dragged_tiles:
+                    for tile in self.parent_viewer.canvas.dragged_tiles.values():
+                        tile.deleteLater()
+                    self.parent_viewer.canvas.dragged_tiles = None
+                # Add all paths back to bank
+                for file_path in file_paths:
+                    self.parent_viewer.add_to_bank(file_path)
+                event.acceptProposedAction()
+                return
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass
+
+        # Single tile drop
         if mime_text.startswith("TILE:"):
             file_path = mime_text[5:]  # Remove "TILE:" prefix
             # Delete the dragged tile widget from the canvas
