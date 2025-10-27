@@ -11,11 +11,16 @@ class GridTile(QLabel):
         self.parent_canvas = parent_canvas
         self.drag_start_position = None
 
-        pixmap = scale_pixmap(file_path, CELL_SIZE, keep_aspect=False)
-        self.setPixmap(pixmap)
-        self.setFixedSize(CELL_SIZE, CELL_SIZE)
+        self.update_pixmap()
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet("background-color: white;")
+
+    def update_pixmap(self):
+        """Update pixmap based on current zoom level"""
+        scaled_size = int(CELL_SIZE * self.parent_canvas.zoom_scale)
+        pixmap = scale_pixmap(self.file_path, scaled_size, keep_aspect=False)
+        self.setPixmap(pixmap)
+        self.setFixedSize(scaled_size, scaled_size)
         
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -54,21 +59,39 @@ class InfiniteGridCanvas(QWidget):
         self.highlight_cell = None  # Cell to highlight during drag
         self.tiles = {}  # Dictionary: (grid_x, grid_y) -> GridTile
 
+        # Zoom and pan state
+        self.zoom_scale = 1.0
+        self.MIN_ZOOM = 0.25  # Can zoom out to 25% - see whole grid
+        self.MAX_ZOOM = 3.0   # Can zoom in to 300%
+        self.pan_offset_x = 0
+        self.pan_offset_y = 0
+        self.middle_mouse_pressed = False
+        self.last_pan_pos = None
+
         # Set minimum size for scrolling
         self.setMinimumSize(2000, 2000)
         
     def paintEvent(self, event):
-        """Draw grid lines"""
+        """Draw grid lines with zoom and pan transformations"""
         painter = QPainter(self)
+
+        # Apply pan and zoom transformations
+        painter.translate(self.pan_offset_x, self.pan_offset_y)
+        painter.scale(self.zoom_scale, self.zoom_scale)
+
         painter.setPen(QPen(QColor(*GRID_LINE_COLOR), 1))
 
+        # Calculate visible area in grid space
+        base_width = int(self.width() / self.zoom_scale)
+        base_height = int(self.height() / self.zoom_scale)
+
         # Draw vertical lines
-        for x in range(0, self.width(), CELL_SIZE):
-            painter.drawLine(x, 0, x, self.height())
+        for x in range(0, base_width, CELL_SIZE):
+            painter.drawLine(x, 0, x, base_height)
 
         # Draw horizontal lines
-        for y in range(0, self.height(), CELL_SIZE):
-            painter.drawLine(0, y, self.width(), y)
+        for y in range(0, base_height, CELL_SIZE):
+            painter.drawLine(0, y, base_width, y)
 
         # Highlight cell during drag
         if self.highlight_cell:
@@ -80,16 +103,100 @@ class InfiniteGridCanvas(QWidget):
                            CELL_SIZE, CELL_SIZE)
                 painter.drawRect(rect)
     
+    def wheelEvent(self, event):
+        """Handle zoom with scroll wheel"""
+        # Calculate zoom factor
+        delta = event.angleDelta().y()
+        zoom_factor = 1.1 if delta > 0 else 0.9
+
+        # Calculate new zoom level
+        new_zoom = self.zoom_scale * zoom_factor
+
+        # Apply zoom limits
+        if new_zoom < self.MIN_ZOOM:
+            new_zoom = self.MIN_ZOOM
+        elif new_zoom > self.MAX_ZOOM:
+            new_zoom = self.MAX_ZOOM
+
+        # Store old zoom for position adjustment
+        old_zoom = self.zoom_scale
+        self.zoom_scale = new_zoom
+
+        # Adjust pan offset to zoom toward mouse position
+        mouse_pos = event.position()
+        self.pan_offset_x = mouse_pos.x() - (mouse_pos.x() - self.pan_offset_x) * (new_zoom / old_zoom)
+        self.pan_offset_y = mouse_pos.y() - (mouse_pos.y() - self.pan_offset_y) * (new_zoom / old_zoom)
+
+        # Update widget size based on zoom
+        base_size = 2000
+        new_size = int(base_size * self.zoom_scale)
+        self.setMinimumSize(new_size, new_size)
+
+        # Update tile positions
+        self.update_tile_positions()
+
+        self.update()
+        event.accept()
+
+    def mousePressEvent(self, event):
+        """Handle middle mouse button press for panning"""
+        if event.button() == Qt.MiddleButton:
+            self.middle_mouse_pressed = True
+            self.last_pan_pos = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        """Handle mouse move for panning"""
+        if self.middle_mouse_pressed and self.last_pan_pos:
+            delta = event.pos() - self.last_pan_pos
+            self.pan_offset_x += delta.x()
+            self.pan_offset_y += delta.y()
+            self.last_pan_pos = event.pos()
+
+            # Update tile positions
+            self.update_tile_positions()
+
+            self.update()
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """Handle middle mouse button release"""
+        if event.button() == Qt.MiddleButton:
+            self.middle_mouse_pressed = False
+            self.last_pan_pos = None
+            self.setCursor(Qt.ArrowCursor)
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
+
     def get_grid_position(self, pos):
-        """Convert pixel position to grid coordinates"""
-        grid_x = pos.x() // CELL_SIZE
-        grid_y = pos.y() // CELL_SIZE
+        """Convert pixel position to grid coordinates, accounting for zoom and pan"""
+        # Transform screen position to grid space
+        x = (pos.x() - self.pan_offset_x) / self.zoom_scale
+        y = (pos.y() - self.pan_offset_y) / self.zoom_scale
+        grid_x = int(x // CELL_SIZE)
+        grid_y = int(y // CELL_SIZE)
         return (grid_x, grid_y)
 
     def get_pixel_position(self, grid_pos):
-        """Convert grid coordinates to pixel position"""
+        """Convert grid coordinates to pixel position, accounting for zoom and pan"""
         grid_x, grid_y = grid_pos
-        return QPoint(grid_x * CELL_SIZE, grid_y * CELL_SIZE)
+        x = grid_x * CELL_SIZE * self.zoom_scale + self.pan_offset_x
+        y = grid_y * CELL_SIZE * self.zoom_scale + self.pan_offset_y
+        return QPoint(int(x), int(y))
+
+    def update_tile_positions(self):
+        """Update all tile positions based on current zoom and pan"""
+        for grid_pos, tile in self.tiles.items():
+            pixel_pos = self.get_pixel_position(grid_pos)
+            tile.move(pixel_pos)
+            # Update tile pixmap and size based on zoom
+            tile.update_pixmap()
     
     def dragEnterEvent(self, event):
         if event.mimeData().hasText():
