@@ -1,7 +1,8 @@
 from PySide6.QtWidgets import QLabel, QApplication
-from PySide6.QtGui import QDrag
+from PySide6.QtGui import QDrag, QPainter, QFont
 from PySide6.QtCore import Qt, QMimeData
 from constants import DRAG_PREVIEW_SIZE, SELECTION_BORDER_COLOR, SELECTION_BORDER_WIDTH, scale_pixmap
+import json
 
 class ClickableLabel(QLabel):
     """Custom label that handles click events for selection and drag"""
@@ -37,18 +38,60 @@ class ClickableLabel(QLabel):
         # Start drag operation
         drag = QDrag(self)
         mime_data = QMimeData()
-        mime_data.setText(self.file_path)
-        drag.setMimeData(mime_data)
 
-        # Set drag preview
-        preview_pixmap = scale_pixmap(self.file_path, DRAG_PREVIEW_SIZE, keep_aspect=False)
-        drag.setPixmap(preview_pixmap)
-        drag.setHotSpot(preview_pixmap.rect().center())
+        # Check if dragging multiple selected images
+        if self.file_path in self.parent_viewer.selected_paths and len(self.parent_viewer.selected_paths) > 1:
+            # Dragging multiple images - encode as JSON
+            # Maintain order from image_paths (bank order)
+            selected_list = [path for path in self.parent_viewer.image_paths
+                           if path in self.parent_viewer.selected_paths]
+            mime_data.setText(json.dumps({"multi": selected_list}))
 
-        result = drag.exec(Qt.MoveAction)
-        # If drop was successful, remove from bank
-        if result == Qt.MoveAction:
-            self.parent_viewer.remove_from_bank(self.file_path)
+            # Set drag preview with count indicator
+            preview_pixmap = scale_pixmap(self.file_path, DRAG_PREVIEW_SIZE, keep_aspect=False)
+            # Draw count badge on preview
+            painter = QPainter(preview_pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+
+            # Draw badge background
+            badge_size = 30
+            painter.setBrush(Qt.red)
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(preview_pixmap.width() - badge_size, 0, badge_size, badge_size)
+
+            # Draw count text
+            painter.setPen(Qt.white)
+            font = QFont()
+            font.setPointSize(12)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(preview_pixmap.width() - badge_size, 0, badge_size, badge_size,
+                           Qt.AlignCenter, str(len(selected_list)))
+            painter.end()
+
+            drag.setMimeData(mime_data)
+            drag.setPixmap(preview_pixmap)
+            drag.setHotSpot(preview_pixmap.rect().center())
+
+            result = drag.exec(Qt.MoveAction)
+            # If drop was successful, remove all selected images from bank
+            if result == Qt.MoveAction:
+                for path in selected_list:
+                    self.parent_viewer.remove_from_bank(path)
+        else:
+            # Dragging single image
+            mime_data.setText(self.file_path)
+            drag.setMimeData(mime_data)
+
+            # Set drag preview
+            preview_pixmap = scale_pixmap(self.file_path, DRAG_PREVIEW_SIZE, keep_aspect=False)
+            drag.setPixmap(preview_pixmap)
+            drag.setHotSpot(preview_pixmap.rect().center())
+
+            result = drag.exec(Qt.MoveAction)
+            # If drop was successful, remove from bank
+            if result == Qt.MoveAction:
+                self.parent_viewer.remove_from_bank(self.file_path)
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:

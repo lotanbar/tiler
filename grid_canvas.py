@@ -2,6 +2,7 @@ from PySide6.QtWidgets import QWidget, QLabel, QApplication
 from PySide6.QtGui import QPainter, QPen, QColor, QDrag
 from PySide6.QtCore import Qt, QMimeData, QPoint, QRect
 from constants import CELL_SIZE, GRID_LINE_COLOR, HIGHLIGHT_COLOR, HIGHLIGHT_ALPHA, scale_pixmap, GRID_ROWS, GRID_COLUMNS
+import json
 
 class GridTile(QLabel):
     """Tile that can be placed on grid and moved"""
@@ -63,6 +64,7 @@ class InfiniteGridCanvas(QWidget):
         super().__init__()
         self.setAcceptDrops(True)
         self.highlight_cell = None  # Cell to highlight during drag
+        self.highlight_cells = []  # Multiple cells to highlight for multi-image drag
         self.tiles = {}  # Dictionary: (grid_x, grid_y) -> GridTile
         self.dragged_tile = None  # Track tile being dragged for reuse
 
@@ -115,15 +117,17 @@ class InfiniteGridCanvas(QWidget):
             if y <= max_grid_y:
                 painter.drawLine(grid_start_x, y, grid_end_x, y)
 
-        # Highlight cell during drag
-        if self.highlight_cell:
-            grid_x, grid_y = self.highlight_cell
-            if (grid_x, grid_y) not in self.tiles:  # Only highlight empty cells
-                painter.setPen(QPen(QColor(*HIGHLIGHT_COLOR), 3))
-                painter.setBrush(QColor(*HIGHLIGHT_COLOR, HIGHLIGHT_ALPHA))
-                rect = QRect(grid_x * CELL_SIZE, grid_y * CELL_SIZE,
-                           CELL_SIZE, CELL_SIZE)
-                painter.drawRect(rect)
+        # Highlight cells during drag
+        cells_to_highlight = self.highlight_cells if self.highlight_cells else ([self.highlight_cell] if self.highlight_cell else [])
+        for cell in cells_to_highlight:
+            if cell:
+                grid_x, grid_y = cell
+                if (grid_x, grid_y) not in self.tiles:  # Only highlight empty cells
+                    painter.setPen(QPen(QColor(*HIGHLIGHT_COLOR), 3))
+                    painter.setBrush(QColor(*HIGHLIGHT_COLOR, HIGHLIGHT_ALPHA))
+                    rect = QRect(grid_x * CELL_SIZE, grid_y * CELL_SIZE,
+                               CELL_SIZE, CELL_SIZE)
+                    painter.drawRect(rect)
     
     def wheelEvent(self, event):
         """Handle zoom with scroll wheel"""
@@ -224,30 +228,99 @@ class InfiniteGridCanvas(QWidget):
         grid_pos = self.get_grid_position(event.position().toPoint())
         grid_x, grid_y = grid_pos
 
-        # Only highlight if cell is empty and within bounds
+        # Check if this is a multi-image drag
+        mime_text = event.mimeData().text()
+        num_images = 1
+        try:
+            data = json.loads(mime_text)
+            if isinstance(data, dict) and "multi" in data:
+                num_images = len(data["multi"])
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+        # Check if all cells for multi-image placement are available
+        all_cells_available = True
+        if num_images > 1:
+            for i in range(num_images):
+                check_pos = (grid_x + i, grid_y)
+                if not (0 <= grid_x + i < self.grid_columns and
+                       0 <= grid_y < self.grid_rows and
+                       check_pos not in self.tiles):
+                    all_cells_available = False
+                    break
+
+        # Only highlight if cell is empty and within bounds (and all cells for multi-image)
         if (0 <= grid_x < self.grid_columns and
             0 <= grid_y < self.grid_rows and
-            grid_pos not in self.tiles):
-            self.highlight_cell = grid_pos
+            grid_pos not in self.tiles and
+            all_cells_available):
+            if num_images > 1:
+                # Highlight all cells for multi-image placement
+                self.highlight_cells = [(grid_x + i, grid_y) for i in range(num_images)]
+                self.highlight_cell = None
+            else:
+                # Single image highlight
+                self.highlight_cell = grid_pos
+                self.highlight_cells = []
         else:
             self.highlight_cell = None
+            self.highlight_cells = []
 
         self.update()  # Trigger repaint
         event.acceptProposedAction()
     
     def dragLeaveEvent(self, event):
         self.highlight_cell = None
+        self.highlight_cells = []
         self.update()
     
     def dropEvent(self, event):
         grid_pos = self.get_grid_position(event.position().toPoint())
         grid_x, grid_y = grid_pos
 
+        mime_text = event.mimeData().text()
+
+        # Check if it's a multi-image drop
+        try:
+            data = json.loads(mime_text)
+            if isinstance(data, dict) and "multi" in data:
+                # Multi-image drop - place them horizontally
+                file_paths = data["multi"]
+
+                # Verify all cells are available
+                all_cells_available = True
+                for i in range(len(file_paths)):
+                    check_pos = (grid_x + i, grid_y)
+                    if not (0 <= grid_x + i < self.grid_columns and
+                           0 <= grid_y < self.grid_rows and
+                           check_pos not in self.tiles):
+                        all_cells_available = False
+                        break
+
+                if all_cells_available:
+                    # Place all images
+                    for i, file_path in enumerate(file_paths):
+                        current_grid_pos = (grid_x + i, grid_y)
+                        tile = GridTile(file_path, self)
+                        pixel_pos = self.get_pixel_position(current_grid_pos)
+                        tile.move(pixel_pos)
+                        tile.show()
+                        self.tiles[current_grid_pos] = tile
+
+                    event.acceptProposedAction()
+
+                self.highlight_cell = None
+                self.highlight_cells = []
+                self.update()
+                return
+        except (json.JSONDecodeError, KeyError, TypeError):
+            # Not a multi-image drop, continue with single-image handling
+            pass
+
         # Only drop if cell is empty and within bounds
         if (0 <= grid_x < self.grid_columns and
             0 <= grid_y < self.grid_rows and
             grid_pos not in self.tiles):
-            mime_text = event.mimeData().text()
 
             # Check if it's a tile being moved or new image from bank
             if mime_text.startswith("TILE:"):
@@ -270,6 +343,7 @@ class InfiniteGridCanvas(QWidget):
                 event.acceptProposedAction()
 
         self.highlight_cell = None
+        self.highlight_cells = []
         self.update()
     
     def remove_tile_at_position(self, pixel_pos):
