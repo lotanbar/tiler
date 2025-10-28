@@ -6,11 +6,12 @@ import json
 
 class GridTile(QLabel):
     """Tile that can be placed on grid and moved"""
-    def __init__(self, file_path, parent_canvas, viewer):
+    def __init__(self, file_path, parent_canvas, viewer, original_bank_index=None):
         super().__init__(parent_canvas)
         self.file_path = file_path
         self.parent_canvas = parent_canvas
         self.viewer = viewer
+        self.original_bank_index = original_bank_index  # Index in bank where this tile came from
         self.drag_start_position = None
         self.is_dragging = False
         self.selected = False
@@ -62,13 +63,20 @@ class GridTile(QLabel):
             # Multi-tile drag - get all selected tiles sorted by position (row, col)
             selected_positions = sorted(list(self.viewer.selected_grid_tiles),
                                        key=lambda p: (p[1], p[0]))  # Sort by row, then column
-            selected_paths = [self.parent_canvas.tiles[pos].file_path
-                            for pos in selected_positions]
+
+            # Collect both file paths and original bank indices
+            selected_data = []
+            for pos in selected_positions:
+                tile = self.parent_canvas.tiles[pos]
+                selected_data.append({
+                    "path": tile.file_path,
+                    "bank_index": tile.original_bank_index
+                })
 
             # Start drag operation
             drag = QDrag(self)
             mime_data = QMimeData()
-            mime_data.setText(json.dumps({"multi": selected_paths}))
+            mime_data.setText(json.dumps({"multi": selected_data}))
             drag.setMimeData(mime_data)
 
             # Set drag preview with count indicator
@@ -89,7 +97,7 @@ class GridTile(QLabel):
             font.setBold(True)
             painter.setFont(font)
             painter.drawText(preview_pixmap.width() - badge_size, 0, badge_size, badge_size,
-                           Qt.AlignCenter, str(len(selected_paths)))
+                           Qt.AlignCenter, str(len(selected_data)))
             painter.end()
 
             drag.setPixmap(preview_pixmap)
@@ -125,7 +133,12 @@ class GridTile(QLabel):
             # Single tile drag
             drag = QDrag(self)
             mime_data = QMimeData()
-            mime_data.setText(f"TILE:{self.file_path}")
+            # Include bank index in single tile drag too
+            tile_data = {
+                "path": self.file_path,
+                "bank_index": self.original_bank_index
+            }
+            mime_data.setText(f"TILE:{json.dumps(tile_data)}")
             drag.setMimeData(mime_data)
 
             # Set drag preview
@@ -455,11 +468,19 @@ class InfiniteGridCanvas(QWidget):
             data = json.loads(mime_text)
             if isinstance(data, dict) and "multi" in data:
                 # Multi-image drop - place them horizontally
-                file_paths = data["multi"]
+                multi_data = data["multi"]
+
+                # Parse data - support both old format (list of strings) and new format (list of dicts)
+                if multi_data and isinstance(multi_data[0], dict):
+                    # New format with bank indices
+                    items = multi_data
+                else:
+                    # Old format - just file paths (from bank)
+                    items = [{"path": p, "bank_index": None} for p in multi_data]
 
                 # Verify all cells are available
                 all_cells_available = True
-                for i in range(len(file_paths)):
+                for i in range(len(items)):
                     check_pos = (grid_x + i, grid_y)
                     if not (0 <= grid_x + i < self.grid_columns and
                            0 <= grid_y < self.grid_rows and
@@ -469,9 +490,11 @@ class InfiniteGridCanvas(QWidget):
 
                 if all_cells_available:
                     # Always create new tiles
-                    for i, file_path in enumerate(file_paths):
+                    for i, item in enumerate(items):
                         current_grid_pos = (grid_x + i, grid_y)
-                        tile = GridTile(file_path, self, self.viewer)
+                        file_path = item["path"]
+                        bank_index = item.get("bank_index")
+                        tile = GridTile(file_path, self, self.viewer, bank_index)
                         pixel_pos = self.get_pixel_position(current_grid_pos)
                         tile.move(pixel_pos)
                         tile.show()
@@ -503,9 +526,17 @@ class InfiniteGridCanvas(QWidget):
                     self.tiles[grid_pos] = tile
                     event.acceptProposedAction()
             else:
-                # New image from bank - create new tile
-                file_path = mime_text
-                tile = GridTile(file_path, self, self.viewer)
+                # New image from bank - parse JSON
+                try:
+                    data = json.loads(mime_text)
+                    file_path = data.get("path", mime_text)  # Fallback to plain text
+                    bank_index = data.get("bank_index")
+                except (json.JSONDecodeError, AttributeError):
+                    # Old format - plain file path
+                    file_path = mime_text
+                    bank_index = None
+
+                tile = GridTile(file_path, self, self.viewer, bank_index)
                 pixel_pos = self.get_pixel_position(grid_pos)
                 tile.move(pixel_pos)
                 tile.show()

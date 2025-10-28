@@ -63,11 +63,27 @@ class ImageBankContainer(QWidget):
             data = json.loads(mime_text)
             if isinstance(data, dict) and "multi" in data:
                 # Multi-tile drop - add all back to bank
-                file_paths = data["multi"]
-                # Note: Don't delete tiles here - let the drag source handle cleanup
-                # Just add paths back to bank
-                for file_path in file_paths:
-                    self.parent_viewer.add_to_bank(file_path)
+                multi_data = data["multi"]
+
+                # Parse data - support both old format (list of strings) and new format (list of dicts)
+                if multi_data and isinstance(multi_data[0], dict):
+                    # New format with bank indices - restore to original positions
+                    for item in multi_data:
+                        file_path = item["path"]
+                        bank_index = item.get("bank_index")
+                        if bank_index is not None and 0 <= bank_index <= len(self.parent_viewer.image_paths):
+                            # Insert at original position
+                            if file_path not in self.parent_viewer.image_paths:
+                                self.parent_viewer.image_paths.insert(bank_index, file_path)
+                        else:
+                            # No valid index, append to end
+                            self.parent_viewer.add_to_bank(file_path)
+                    self.parent_viewer.refresh_grid()
+                else:
+                    # Old format - just file paths, append to end
+                    for file_path in multi_data:
+                        self.parent_viewer.add_to_bank(file_path)
+
                 event.acceptProposedAction()
                 return
         except (json.JSONDecodeError, KeyError, TypeError):
@@ -75,12 +91,30 @@ class ImageBankContainer(QWidget):
 
         # Single tile drop
         if mime_text.startswith("TILE:"):
-            file_path = mime_text[5:]  # Remove "TILE:" prefix
+            tile_data_str = mime_text[5:]  # Remove "TILE:" prefix
             # Delete the dragged tile widget from the canvas
             if self.parent_viewer.canvas.dragged_tile:
                 self.parent_viewer.canvas.dragged_tile.deleteLater()
                 self.parent_viewer.canvas.dragged_tile = None
-            self.parent_viewer.add_to_bank(file_path)
+
+            # Parse tile data
+            try:
+                tile_data = json.loads(tile_data_str)
+                file_path = tile_data["path"]
+                bank_index = tile_data.get("bank_index")
+
+                # Restore to original position if available
+                if bank_index is not None and 0 <= bank_index <= len(self.parent_viewer.image_paths):
+                    if file_path not in self.parent_viewer.image_paths:
+                        self.parent_viewer.image_paths.insert(bank_index, file_path)
+                    self.parent_viewer.refresh_grid()
+                else:
+                    # No valid index, append to end
+                    self.parent_viewer.add_to_bank(file_path)
+            except (json.JSONDecodeError, KeyError):
+                # Old format - plain file path
+                self.parent_viewer.add_to_bank(tile_data_str)
+
             event.acceptProposedAction()
 
     def paintEvent(self, event):

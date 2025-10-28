@@ -42,10 +42,15 @@ class ClickableLabel(QLabel):
         # Check if dragging multiple selected images
         if self.file_path in self.parent_viewer.selected_paths and len(self.parent_viewer.selected_paths) > 1:
             # Dragging multiple images - encode as JSON
-            # Maintain order from image_paths (bank order)
-            selected_list = [path for path in self.parent_viewer.image_paths
-                           if path in self.parent_viewer.selected_paths]
-            mime_data.setText(json.dumps({"multi": selected_list}))
+            # Maintain order from image_paths (bank order) and include indices
+            selected_data = []
+            for idx, path in enumerate(self.parent_viewer.image_paths):
+                if path in self.parent_viewer.selected_paths:
+                    selected_data.append({
+                        "path": path,
+                        "bank_index": idx
+                    })
+            mime_data.setText(json.dumps({"multi": selected_data}))
 
             # Set drag preview with count indicator
             preview_pixmap = scale_pixmap(self.file_path, DRAG_PREVIEW_SIZE, keep_aspect=False)
@@ -66,7 +71,7 @@ class ClickableLabel(QLabel):
             font.setBold(True)
             painter.setFont(font)
             painter.drawText(preview_pixmap.width() - badge_size, 0, badge_size, badge_size,
-                           Qt.AlignCenter, str(len(selected_list)))
+                           Qt.AlignCenter, str(len(selected_data)))
             painter.end()
 
             drag.setMimeData(mime_data)
@@ -76,11 +81,15 @@ class ClickableLabel(QLabel):
             result = drag.exec(Qt.MoveAction)
             # If drop was successful, remove all selected images from bank
             if result == Qt.MoveAction:
-                for path in selected_list:
-                    self.parent_viewer.remove_from_bank(path)
+                for item in selected_data:
+                    self.parent_viewer.remove_from_bank(item["path"])
         else:
-            # Dragging single image
-            mime_data.setText(self.file_path)
+            # Dragging single image - include bank index
+            bank_index = self.parent_viewer.image_paths.index(self.file_path)
+            mime_data.setText(json.dumps({
+                "path": self.file_path,
+                "bank_index": bank_index
+            }))
             drag.setMimeData(mime_data)
 
             # Set drag preview
