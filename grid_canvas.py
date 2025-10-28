@@ -180,6 +180,7 @@ class InfiniteGridCanvas(QWidget):
         super().__init__()
         self.viewer = viewer  # Reference to parent ImageViewer
         self.setAcceptDrops(True)
+        self.setFocusPolicy(Qt.StrongFocus)  # Enable keyboard focus
         self.highlight_cell = None  # Cell to highlight during drag
         self.highlight_cells = []  # Multiple cells to highlight for multi-image drag
         self.tiles = {}  # Dictionary: (grid_x, grid_y) -> GridTile
@@ -197,7 +198,12 @@ class InfiniteGridCanvas(QWidget):
         self.pan_offset_x = 0
         self.pan_offset_y = 0
         self.middle_mouse_pressed = False
+        self.ctrl_left_mouse_pressed = False  # Track Ctrl+Left mouse panning
         self.last_pan_pos = None
+
+        # Keyboard control settings
+        self.PAN_STEP = 50  # Pixels to pan per arrow key press
+        self.KEYBOARD_ZOOM_FACTOR = 1.1  # Zoom factor for keyboard zoom
 
         # Marquee selection state
         self.marquee_selecting = False
@@ -297,28 +303,40 @@ class InfiniteGridCanvas(QWidget):
 
     def mousePressEvent(self, event):
         """Handle middle mouse button press for panning and left click for marquee selection"""
+        # Grab focus when clicked
+        self.setFocus()
+
         if event.button() == Qt.MiddleButton:
             self.middle_mouse_pressed = True
             self.last_pan_pos = event.pos()
             self.setCursor(Qt.ClosedHandCursor)
             event.accept()
         elif event.button() == Qt.LeftButton:
-            # Check if clicking on a tile or empty space
-            widget_at_pos = self.childAt(event.pos())
-            if widget_at_pos is None or not isinstance(widget_at_pos, GridTile):
-                # Clicking on empty space - start marquee selection
-                self.marquee_selecting = True
-                self.marquee_start_pos = event.pos()
-                self.marquee_current_pos = event.pos()
+            modifiers = QApplication.keyboardModifiers()
+
+            # Ctrl+Left Click to start drag-to-pan (like middle mouse)
+            if modifiers == Qt.ControlModifier:
+                self.ctrl_left_mouse_pressed = True
+                self.last_pan_pos = event.pos()
+                self.setCursor(Qt.ClosedHandCursor)
                 event.accept()
             else:
-                super().mousePressEvent(event)
+                # Check if clicking on a tile or empty space
+                widget_at_pos = self.childAt(event.pos())
+                if widget_at_pos is None or not isinstance(widget_at_pos, GridTile):
+                    # Clicking on empty space - start marquee selection
+                    self.marquee_selecting = True
+                    self.marquee_start_pos = event.pos()
+                    self.marquee_current_pos = event.pos()
+                    event.accept()
+                else:
+                    super().mousePressEvent(event)
         else:
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         """Handle mouse move for panning and marquee selection"""
-        if self.middle_mouse_pressed and self.last_pan_pos:
+        if (self.middle_mouse_pressed or self.ctrl_left_mouse_pressed) and self.last_pan_pos:
             delta = event.pos() - self.last_pan_pos
             self.pan_offset_x += delta.x()
             self.pan_offset_y += delta.y()
@@ -341,6 +359,12 @@ class InfiniteGridCanvas(QWidget):
         """Handle middle mouse button release and marquee selection completion"""
         if event.button() == Qt.MiddleButton:
             self.middle_mouse_pressed = False
+            self.last_pan_pos = None
+            self.setCursor(Qt.ArrowCursor)
+            event.accept()
+        elif event.button() == Qt.LeftButton and self.ctrl_left_mouse_pressed:
+            # Release Ctrl+Left drag panning
+            self.ctrl_left_mouse_pressed = False
             self.last_pan_pos = None
             self.setCursor(Qt.ArrowCursor)
             event.accept()
@@ -377,6 +401,91 @@ class InfiniteGridCanvas(QWidget):
             event.accept()
         else:
             super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event):
+        """Handle keyboard input for panning and zooming"""
+        key = event.key()
+        modifiers = event.modifiers()
+
+        # Arrow keys for panning
+        if key == Qt.Key_Left:
+            self.pan_offset_x += self.PAN_STEP
+            self.update_tile_positions()
+            self.update()
+            event.accept()
+        elif key == Qt.Key_Right:
+            self.pan_offset_x -= self.PAN_STEP
+            self.update_tile_positions()
+            self.update()
+            event.accept()
+        elif key == Qt.Key_Up:
+            self.pan_offset_y += self.PAN_STEP
+            self.update_tile_positions()
+            self.update()
+            event.accept()
+        elif key == Qt.Key_Down:
+            self.pan_offset_y -= self.PAN_STEP
+            self.update_tile_positions()
+            self.update()
+            event.accept()
+
+        # Ctrl+Plus/Minus for zooming
+        elif modifiers == Qt.ControlModifier and (key == Qt.Key_Plus or key == Qt.Key_Equal):
+            # Zoom in
+            self.zoom_in_keyboard()
+            event.accept()
+        elif modifiers == Qt.ControlModifier and (key == Qt.Key_Minus or key == Qt.Key_Underscore):
+            # Zoom out
+            self.zoom_out_keyboard()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def zoom_in_keyboard(self):
+        """Zoom in using keyboard (zooms toward center of viewport)"""
+        # Calculate new zoom level
+        new_zoom = self.zoom_scale * self.KEYBOARD_ZOOM_FACTOR
+
+        # Apply zoom limits
+        if new_zoom > self.MAX_ZOOM:
+            new_zoom = self.MAX_ZOOM
+
+        # Store old zoom for position adjustment
+        old_zoom = self.zoom_scale
+        self.zoom_scale = new_zoom
+
+        # Zoom toward center of viewport
+        center_x = self.width() / 2
+        center_y = self.height() / 2
+        self.pan_offset_x = center_x - (center_x - self.pan_offset_x) * (new_zoom / old_zoom)
+        self.pan_offset_y = center_y - (center_y - self.pan_offset_y) * (new_zoom / old_zoom)
+
+        # Update tile positions
+        self.update_tile_positions()
+        self.update()
+
+    def zoom_out_keyboard(self):
+        """Zoom out using keyboard (zooms toward center of viewport)"""
+        # Calculate new zoom level
+        new_zoom = self.zoom_scale / self.KEYBOARD_ZOOM_FACTOR
+
+        # Apply zoom limits
+        if new_zoom < self.MIN_ZOOM:
+            new_zoom = self.MIN_ZOOM
+
+        # Store old zoom for position adjustment
+        old_zoom = self.zoom_scale
+        self.zoom_scale = new_zoom
+
+        # Zoom toward center of viewport
+        center_x = self.width() / 2
+        center_y = self.height() / 2
+        self.pan_offset_x = center_x - (center_x - self.pan_offset_x) * (new_zoom / old_zoom)
+        self.pan_offset_y = center_y - (center_y - self.pan_offset_y) * (new_zoom / old_zoom)
+
+        # Update tile positions
+        self.update_tile_positions()
+        self.update()
 
     def get_grid_position(self, pos):
         """Convert pixel position to grid coordinates, accounting for zoom and pan"""
