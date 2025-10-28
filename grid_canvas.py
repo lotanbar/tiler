@@ -567,6 +567,29 @@ class InfiniteGridCanvas(QWidget):
         self.tiles.clear()
         self.update()
 
+    def add_tile_from_data(self, grid_pos, file_path, original_bank_index):
+        """
+        Add a tile to the grid from saved project data
+
+        Args:
+            grid_pos: Tuple (grid_x, grid_y) for tile position
+            file_path: Path to the image file
+            original_bank_index: Index in the bank where this tile originated
+        """
+        # Create new GridTile
+        tile = GridTile(file_path, self, self.viewer, original_bank_index)
+
+        # Add to tiles dictionary
+        self.tiles[grid_pos] = tile
+
+        # Position the tile correctly
+        pixel_pos = self.get_pixel_position(grid_pos)
+        tile.move(pixel_pos)
+        tile.show()
+
+        # Update the tile's visual state based on zoom
+        tile.update_pixmap()
+
     def remove_tiles_by_path(self, file_path):
         """Remove all tiles with the given file path"""
         positions_to_remove = [pos for pos, tile in self.tiles.items()

@@ -1,13 +1,14 @@
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QPushButton,
                                QLabel, QFileDialog, QScrollArea, QGridLayout,
-                               QDialog, QSplitter, QHBoxLayout, QSpinBox, QApplication)
+                               QDialog, QSplitter, QHBoxLayout, QSpinBox, QApplication, QMessageBox, QMenu)
 from PySide6.QtCore import Qt, QRect, QPoint
-from PySide6.QtGui import QPainter, QPen, QColor
+from PySide6.QtGui import QPainter, QPen, QColor, QAction, QKeySequence
 import os
 
 from grid_canvas import InfiniteGridCanvas
 from image_bank import ClickableLabel
 from constants import THUMBNAIL_WIDTH, LARGE_VIEW_WIDTH, scale_pixmap, GRID_ROWS, GRID_COLUMNS
+from project_manager import ProjectManager
 
 class ImageBankContainer(QWidget):
     """Container widget for image bank that accepts drops"""
@@ -208,7 +209,10 @@ class ImageViewer(QMainWindow):
         super().__init__()
         self.setWindowTitle("Image Bank")
         self.setGeometry(100, 100, 1200, 800)
-        
+
+        # Track current project file
+        self.current_project_file = None
+
         # Main widget
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -251,6 +255,41 @@ class ImageViewer(QMainWindow):
 
         # Buttons at the bottom
         button_row = QHBoxLayout()
+
+        # File menu button on the left
+        file_menu_btn = QPushButton("File")
+        file_menu = QMenu(self)
+
+        # New Project action
+        new_action = QAction("New Project", self)
+        new_action.setShortcut(QKeySequence.New)
+        new_action.triggered.connect(self.new_project)
+        file_menu.addAction(new_action)
+
+        file_menu.addSeparator()
+
+        # Save action
+        save_action = QAction("Save Project", self)
+        save_action.setShortcut(QKeySequence.Save)
+        save_action.triggered.connect(self.save_project)
+        file_menu.addAction(save_action)
+
+        # Save As action
+        save_as_action = QAction("Save Project As...", self)
+        save_as_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        save_as_action.triggered.connect(self.save_project_as)
+        file_menu.addAction(save_as_action)
+
+        file_menu.addSeparator()
+
+        # Load action
+        load_action = QAction("Open Project...", self)
+        load_action.setShortcut(QKeySequence.Open)
+        load_action.triggered.connect(self.load_project)
+        file_menu.addAction(load_action)
+
+        file_menu_btn.setMenu(file_menu)
+        button_row.addWidget(file_menu_btn)
 
         # Left side buttons
         import_btn = QPushButton("Import Images")
@@ -316,6 +355,145 @@ class ImageViewer(QMainWindow):
 
         # Development: Auto-load images from assets folder if it exists
         self.auto_load_assets()
+
+    def new_project(self):
+        """Create a new project (clear current state)"""
+        reply = QMessageBox.question(
+            self,
+            "New Project",
+            "Are you sure you want to start a new project? All unsaved changes will be lost.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            # Clear everything
+            self.clear_grid()
+            self.image_paths.clear()
+            self.selected_paths.clear()
+            self.last_selected_index = None
+            self.current_project_file = None
+            self.refresh_grid()
+            self.setWindowTitle("Image Bank - New Project")
+
+    def save_project(self):
+        """Save the current project"""
+        if self.current_project_file:
+            # Save to existing file
+            success = ProjectManager.save_project(
+                self.current_project_file,
+                self.canvas,
+                self
+            )
+            if success:
+                QMessageBox.information(self, "Success", "Project saved successfully!")
+                self.setWindowTitle(f"Image Bank - {os.path.basename(self.current_project_file)}")
+            else:
+                QMessageBox.warning(self, "Error", "Failed to save project!")
+        else:
+            # No file yet, do Save As
+            self.save_project_as()
+
+    def save_project_as(self):
+        """Save the current project with a new filename"""
+        desktop_path = os.path.expanduser("~/Desktop")
+
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Project As",
+            desktop_path,
+            f"Tiler Projects (*{ProjectManager.DEFAULT_EXTENSION})"
+        )
+
+        if filepath:
+            success = ProjectManager.save_project(filepath, self.canvas, self)
+            if success:
+                self.current_project_file = filepath
+                QMessageBox.information(self, "Success", "Project saved successfully!")
+                self.setWindowTitle(f"Image Bank - {os.path.basename(filepath)}")
+            else:
+                QMessageBox.warning(self, "Error", "Failed to save project!")
+
+    def load_project(self):
+        """Load a project from a file"""
+        desktop_path = os.path.expanduser("~/Desktop")
+
+        filepath, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Project",
+            desktop_path,
+            f"Tiler Projects (*{ProjectManager.DEFAULT_EXTENSION})"
+        )
+
+        if filepath:
+            project_data = ProjectManager.load_project(filepath)
+
+            if project_data is None:
+                QMessageBox.warning(self, "Error", "Failed to load project! Check console for details.")
+                return
+
+            # Clear current state
+            self.clear_grid()
+            self.image_paths.clear()
+            self.selected_paths.clear()
+
+            # Load bank images
+            self.image_paths = project_data["bank"]["image_paths"]
+            self.refresh_grid()
+
+            # Load grid settings
+            grid_data = project_data["grid"]
+            self.canvas.grid_rows = grid_data["rows"]
+            self.canvas.grid_columns = grid_data["columns"]
+            self.canvas.zoom_scale = grid_data["zoom_scale"]
+            self.canvas.pan_offset_x = grid_data["pan_offset_x"]
+            self.canvas.pan_offset_y = grid_data["pan_offset_y"]
+
+            # Update UI controls
+            self.rows_input.setValue(grid_data["rows"])
+            self.columns_input.setValue(grid_data["columns"])
+
+            # Load tiles
+            for tile_data in project_data["tiles"]:
+                grid_pos = (tile_data["grid_x"], tile_data["grid_y"])
+                file_path = tile_data["file_path"]
+                bank_index = tile_data["original_bank_index"]
+
+                # Create tile on canvas
+                self.canvas.add_tile_from_data(
+                    grid_pos,
+                    file_path,
+                    bank_index
+                )
+
+            # Restore UI state if available
+            if "ui_state" in project_data:
+                ui_state = project_data["ui_state"]
+
+                # Restore grid tile selections
+                if "selected_grid_positions" in ui_state:
+                    for pos_list in ui_state["selected_grid_positions"]:
+                        grid_pos = tuple(pos_list)
+                        if grid_pos in self.canvas.tiles:
+                            self.selected_grid_tiles.add(grid_pos)
+                            self.canvas.tiles[grid_pos].set_selected(True)
+
+                # Restore bank selections
+                if "selected_bank_paths" in ui_state:
+                    for path in ui_state["selected_bank_paths"]:
+                        if path in self.image_paths:
+                            self.selected_paths.add(path)
+                            if path in self.image_labels:
+                                self.image_labels[path].set_selected(True)
+
+            # Update canvas
+            self.canvas.update()
+
+            # Track current file
+            self.current_project_file = filepath
+            self.setWindowTitle(f"Image Bank - {os.path.basename(filepath)}")
+
+            QMessageBox.information(self, "Success", "Project loaded successfully!")
 
     def auto_load_assets(self):
         """Auto-load images from assets folder for development"""
