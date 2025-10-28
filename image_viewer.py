@@ -22,11 +22,16 @@ class ImageBankContainer(QWidget):
         self.marquee_start_pos = None
         self.marquee_current_pos = None
 
+        # Drag feedback state
+        self.is_drag_over = False
+
     def dragEnterEvent(self, event):
         if event.mimeData().hasText():
             mime_text = event.mimeData().text()
             # Accept tiles being moved from grid (single or multi)
             if mime_text.startswith("TILE:"):
+                self.is_drag_over = True
+                self.update()
                 event.acceptProposedAction()
             else:
                 # Check for multi-tile JSON
@@ -34,6 +39,8 @@ class ImageBankContainer(QWidget):
                     import json
                     data = json.loads(mime_text)
                     if isinstance(data, dict) and "multi" in data:
+                        self.is_drag_over = True
+                        self.update()
                         event.acceptProposedAction()
                     else:
                         event.ignore()
@@ -57,6 +64,10 @@ class ImageBankContainer(QWidget):
 
     def dropEvent(self, event):
         mime_text = event.mimeData().text()
+
+        # Clear drag state
+        self.is_drag_over = False
+        self.update()
 
         # Check if it's a multi-tile drop from grid
         try:
@@ -118,9 +129,19 @@ class ImageBankContainer(QWidget):
 
             event.acceptProposedAction()
 
+    def dragLeaveEvent(self, event):
+        """Clear drag state when drag leaves the bank"""
+        self.is_drag_over = False
+        self.update()
+
     def paintEvent(self, event):
-        """Draw marquee selection rectangle"""
+        """Draw marquee selection rectangle and drag feedback"""
         super().paintEvent(event)
+
+        # Draw blue overlay when dragging over the bank
+        if self.is_drag_over:
+            painter = QPainter(self)
+            painter.fillRect(self.rect(), QColor(74, 144, 226, 60))
 
         if self.marquee_selecting and self.marquee_start_pos and self.marquee_current_pos:
             painter = QPainter(self)
@@ -248,7 +269,8 @@ class ImageViewer(QMainWindow):
         self.image_container = ImageBankContainer(self)
         self.image_layout = QGridLayout(self.image_container)
         self.image_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
-        self.image_layout.setSpacing(5)
+        self.image_layout.setHorizontalSpacing(3)
+        self.image_layout.setVerticalSpacing(5)
         self.scroll.setWidget(self.image_container)
 
         bottom_layout.addWidget(self.scroll)
@@ -339,7 +361,7 @@ class ImageViewer(QMainWindow):
         # Add widgets to splitter
         splitter.addWidget(top_widget)
         splitter.addWidget(bottom_widget)
-        splitter.setSizes([600, 200])
+        splitter.setSizes([500, 300])
         
         main_layout.addWidget(splitter)
         
@@ -692,7 +714,7 @@ class ImageViewer(QMainWindow):
 
         # Calculate columns based on current width
         available_width = self.scroll.viewport().width()
-        images_per_row = max(1, available_width // (THUMBNAIL_WIDTH + 10))
+        images_per_row = max(1, available_width // (THUMBNAIL_WIDTH + 6))
 
         # Add all images to grid
         for index, file_path in enumerate(self.image_paths):

@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt
 
 # Size constants
 CELL_SIZE = 60
-THUMBNAIL_WIDTH = 100
+THUMBNAIL_WIDTH = 85
 LARGE_VIEW_WIDTH = 800
 DRAG_PREVIEW_SIZE = 100
 
