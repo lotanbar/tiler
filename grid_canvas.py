@@ -3,11 +3,31 @@ from PySide6.QtGui import QPainter, QPen, QColor, QDrag, QFont
 from PySide6.QtCore import Qt, QMimeData, QPoint, QRect, QTimer
 from constants import CELL_SIZE, GRID_LINE_COLOR, HIGHLIGHT_COLOR, HIGHLIGHT_ALPHA, scale_pixmap, GRID_ROWS, GRID_COLUMNS, GRID_TILE_SELECTION_COLOR, SELECTION_BORDER_WIDTH, DRAG_PREVIEW_SIZE
 import json
+import logging
+import traceback
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('tiler_debug.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 class GridTile(QLabel):
     """Tile that can be placed on grid and moved"""
+    # Class-level counter for tracking instances
+    _instance_counter = 0
+
     def __init__(self, file_path, parent_canvas, viewer, original_bank_index=None):
         super().__init__(parent_canvas)
+        GridTile._instance_counter += 1
+        self._instance_id = GridTile._instance_counter
+        logger.debug(f"[TILE-{self._instance_id}] Created for {file_path}, bank_index={original_bank_index}")
+
         self.file_path = file_path
         self.parent_canvas = parent_canvas
         self.viewer = viewer
@@ -15,6 +35,7 @@ class GridTile(QLabel):
         self.drag_start_position = None
         self.is_dragging = False
         self.selected = False
+        self._is_deleted = False
 
         self.update_pixmap()
         self.setAlignment(Qt.AlignCenter)
@@ -22,35 +43,72 @@ class GridTile(QLabel):
 
     def update_pixmap(self):
         """Update pixmap based on current zoom level"""
-        scaled_size = int(CELL_SIZE * self.parent_canvas.zoom_scale)
-        pixmap = scale_pixmap(self.file_path, scaled_size, keep_aspect=False)
-        self.setPixmap(pixmap)
-        self.setFixedSize(scaled_size, scaled_size)
+        if self._is_deleted:
+            logger.error(f"[TILE-{self._instance_id}] ⚠️ update_pixmap called on DELETED tile!")
+            return
+        try:
+            scaled_size = int(CELL_SIZE * self.parent_canvas.zoom_scale)
+            pixmap = scale_pixmap(self.file_path, scaled_size, keep_aspect=False)
+            if pixmap is None:
+                logger.warning(f"[TILE-{self._instance_id}] Failed to load pixmap for {self.file_path}")
+                return
+            self.setPixmap(pixmap)
+            self.setFixedSize(scaled_size, scaled_size)
+        except Exception as e:
+            logger.error(f"[TILE-{self._instance_id}] Exception in update_pixmap: {e}\n{traceback.format_exc()}")
+
+    def deleteLater(self):
+        """Override to track deletion"""
+        logger.debug(f"[TILE-{self._instance_id}] deleteLater() called for {self.file_path}")
+        logger.debug(f"[TILE-{self._instance_id}] Call stack:\n{traceback.format_stack()}")
+        self._is_deleted = True
+        super().deleteLater()
 
     def set_selected(self, selected):
         """Set selection state and update visual styling"""
-        self.selected = selected
-        if selected:
-            self.setStyleSheet(f"background-color: white; border: {SELECTION_BORDER_WIDTH}px solid {GRID_TILE_SELECTION_COLOR};")
-        else:
-            self.setStyleSheet("background-color: white;")
+        if self._is_deleted:
+            logger.error(f"[TILE-{self._instance_id}] ⚠️ set_selected called on DELETED tile!")
+            logger.error(f"Call stack:\n{''.join(traceback.format_stack())}")
+            return
+        try:
+            self.selected = selected
+            if selected:
+                self.setStyleSheet(f"background-color: white; border: {SELECTION_BORDER_WIDTH}px solid {GRID_TILE_SELECTION_COLOR};")
+            else:
+                self.setStyleSheet("background-color: white;")
+            logger.debug(f"[TILE-{self._instance_id}] set_selected({selected}) completed")
+        except Exception as e:
+            logger.error(f"[TILE-{self._instance_id}] Exception in set_selected: {e}\n{traceback.format_exc()}")
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.drag_start_position = event.pos()
-            self.is_dragging = False
-            self.raise_()  # Bring to front
-        elif event.button() == Qt.RightButton:
-            self.viewer.show_large_image(self.file_path)
+        if self._is_deleted:
+            logger.error(f"[TILE-{self._instance_id}] ⚠️ mousePressEvent called on DELETED tile!")
+            return
+        try:
+            if event.button() == Qt.LeftButton:
+                self.drag_start_position = event.pos()
+                self.is_dragging = False
+                self.raise_()  # Bring to front
+            elif event.button() == Qt.RightButton:
+                self.viewer.show_large_image(self.file_path)
+        except Exception as e:
+            logger.error(f"[TILE-{self._instance_id}] Exception in mousePressEvent: {e}\n{traceback.format_exc()}")
     
     def mouseMoveEvent(self, event):
-        if not (event.buttons() & Qt.LeftButton):
+        if self._is_deleted:
+            logger.error(f"[TILE-{self._instance_id}] ⚠️ mouseMoveEvent called on DELETED tile!")
             return
-        if (event.pos() - self.drag_start_position).manhattanLength() < QApplication.startDragDistance():
-            return
+        try:
+            if not (event.buttons() & Qt.LeftButton):
+                return
+            if (event.pos() - self.drag_start_position).manhattanLength() < QApplication.startDragDistance():
+                return
 
-        # Mark that we're dragging
-        self.is_dragging = True
+            # Mark that we're dragging
+            self.is_dragging = True
+        except Exception as e:
+            logger.error(f"[TILE-{self._instance_id}] Exception in mouseMoveEvent start: {e}\n{traceback.format_exc()}")
+            return
 
         # Get grid position of this tile
         grid_pos = self.parent_canvas.get_grid_position(self.pos())
@@ -60,6 +118,8 @@ class GridTile(QLabel):
             grid_pos in self.viewer.selected_grid_tiles and
             len(self.viewer.selected_grid_tiles) > 1):
 
+            logger.info(f"[TILE-{self._instance_id}] Starting multi-tile drag of {len(self.viewer.selected_grid_tiles)} tiles")
+
             # Multi-tile drag - get all selected tiles sorted by position (row, col)
             selected_positions = sorted(list(self.viewer.selected_grid_tiles),
                                        key=lambda p: (p[1], p[0]))  # Sort by row, then column
@@ -68,19 +128,27 @@ class GridTile(QLabel):
             selected_data = []
             for pos in selected_positions:
                 tile = self.parent_canvas.tiles[pos]
+                logger.debug(f"[TILE-{tile._instance_id}] Added to multi-drag at pos {pos}")
                 selected_data.append({
                     "path": tile.file_path,
                     "bank_index": tile.original_bank_index
                 })
 
             # Start drag operation
-            drag = QDrag(self)
+            # IMPORTANT: Use parent_canvas as parent, not self (tile)
+            # If we use self, Qt crashes when accessing the hidden tile after drag
+            drag = QDrag(self.parent_canvas)
             mime_data = QMimeData()
             mime_data.setText(json.dumps({"multi": selected_data}))
             drag.setMimeData(mime_data)
+            logger.debug(f"[TILE-{self._instance_id}] Created QDrag with canvas as parent (not tile)")
 
             # Set drag preview with count indicator
             preview_pixmap = scale_pixmap(self.file_path, DRAG_PREVIEW_SIZE, keep_aspect=False)
+            if preview_pixmap is None:
+                logger.error(f"[TILE-{self._instance_id}] Failed to create preview pixmap, aborting drag")
+                return
+
             painter = QPainter(preview_pixmap)
             painter.setRenderHint(QPainter.Antialiasing)
 
@@ -107,27 +175,49 @@ class GridTile(QLabel):
             self.parent_canvas.dragged_tiles = {}  # Map: grid_pos -> tile
             for pos in selected_positions:
                 tile = self.parent_canvas.tiles[pos]
+                logger.debug(f"[TILE-{tile._instance_id}] Removed from grid at pos {pos} for drag")
                 self.parent_canvas.dragged_tiles[pos] = tile
-                tile.hide()
+                tile.hide()  # Hide tiles during drag for better UX
                 del self.parent_canvas.tiles[pos]
 
+            logger.debug("Starting drag.exec() - this blocks until drag completes")
             result = drag.exec(Qt.MoveAction)
+            logger.debug(f"drag.exec() returned - now sleeping 150ms for Qt cleanup")
+            # CRITICAL: Sleep to allow Qt's internal drag cleanup to complete
+            # Without this, Qt crashes when accessing hidden tiles
+            import time
+            time.sleep(0.15)  # 150ms delay
+            logger.debug("Sleep complete - safe to proceed")
+            logger.info(f"[TILE-{self._instance_id}] Multi-drag result: {result}")
 
             # If drag cancelled, restore all tiles
             if result == Qt.IgnoreAction:
+                logger.info(f"Multi-drag cancelled - restoring {len(self.parent_canvas.dragged_tiles)} tiles")
                 for pos, tile in self.parent_canvas.dragged_tiles.items():
+                    logger.debug(f"[TILE-{tile._instance_id}] Restored to pos {pos}")
                     self.parent_canvas.tiles[pos] = tile
                     tile.show()
                 self.parent_canvas.dragged_tiles = None
+
+                # Clear selection even on cancelled drag
+                if self.viewer:
+                    logger.debug("Clearing selection after cancelled drag")
+                    self.viewer.clear_grid_selection()
             elif result == Qt.MoveAction:
                 # Drop succeeded
+                logger.info(f"Multi-drag succeeded - {len(self.parent_canvas.dragged_tiles)} tiles were dragged")
                 # Clear selection first
                 if self.viewer:
+                    logger.debug("ABOUT TO CALL clear_grid_selection()")
                     self.viewer.clear_grid_selection()
+                    logger.debug("clear_grid_selection() RETURNED SUCCESSFULLY")
 
                 # DON'T delete tiles from here - let the canvas handle cleanup
-                # Schedule cleanup to happen from canvas, not from self
-                QTimer.singleShot(0, self.parent_canvas.cleanup_multi_drag)
+                # Schedule cleanup with delay to allow Qt's internal cleanup to finish
+                # Using 100ms delay to ensure all drag-related events are processed
+                logger.debug("Scheduling cleanup_multi_drag() with 100ms delay")
+                QTimer.singleShot(100, self.parent_canvas.cleanup_multi_drag)
+                logger.debug("mouseMoveEvent multi-drag ABOUT TO RETURN")
 
         else:
             # Single tile drag
@@ -212,7 +302,12 @@ class InfiniteGridCanvas(QWidget):
         
     def paintEvent(self, event):
         """Draw grid lines with zoom and pan transformations"""
-        painter = QPainter(self)
+        logger.debug("paintEvent START")
+        try:
+            painter = QPainter(self)
+        except Exception as e:
+            logger.error(f"Exception creating QPainter: {e}\n{traceback.format_exc()}")
+            return
 
         # Apply pan and zoom transformations
         painter.translate(self.pan_offset_x, self.pan_offset_y)
@@ -271,35 +366,44 @@ class InfiniteGridCanvas(QWidget):
 
             painter.drawRect(x1, y1, x2 - x1, y2 - y1)
 
+        logger.debug("paintEvent END")
+
     def wheelEvent(self, event):
         """Handle zoom with scroll wheel"""
-        # Calculate zoom factor
-        delta = event.angleDelta().y()
-        zoom_factor = 1.1 if delta > 0 else 0.9
+        logger.debug("wheelEvent START")
+        try:
+            # Calculate zoom factor
+            delta = event.angleDelta().y()
+            zoom_factor = 1.1 if delta > 0 else 0.9
 
-        # Calculate new zoom level
-        new_zoom = self.zoom_scale * zoom_factor
+            # Calculate new zoom level
+            new_zoom = self.zoom_scale * zoom_factor
 
-        # Apply zoom limits
-        if new_zoom < self.MIN_ZOOM:
-            new_zoom = self.MIN_ZOOM
-        elif new_zoom > self.MAX_ZOOM:
-            new_zoom = self.MAX_ZOOM
+            # Apply zoom limits
+            if new_zoom < self.MIN_ZOOM:
+                new_zoom = self.MIN_ZOOM
+            elif new_zoom > self.MAX_ZOOM:
+                new_zoom = self.MAX_ZOOM
 
-        # Store old zoom for position adjustment
-        old_zoom = self.zoom_scale
-        self.zoom_scale = new_zoom
+            # Store old zoom for position adjustment
+            old_zoom = self.zoom_scale
+            self.zoom_scale = new_zoom
 
-        # Adjust pan offset to zoom toward mouse position
-        mouse_pos = event.position()
-        self.pan_offset_x = mouse_pos.x() - (mouse_pos.x() - self.pan_offset_x) * (new_zoom / old_zoom)
-        self.pan_offset_y = mouse_pos.y() - (mouse_pos.y() - self.pan_offset_y) * (new_zoom / old_zoom)
+            # Adjust pan offset to zoom toward mouse position
+            mouse_pos = event.position()
+            self.pan_offset_x = mouse_pos.x() - (mouse_pos.x() - self.pan_offset_x) * (new_zoom / old_zoom)
+            self.pan_offset_y = mouse_pos.y() - (mouse_pos.y() - self.pan_offset_y) * (new_zoom / old_zoom)
 
-        # Update tile positions
-        self.update_tile_positions()
+            logger.debug(f"wheelEvent calling update_tile_positions() - {len(self.tiles)} tiles")
+            # Update tile positions
+            self.update_tile_positions()
+            logger.debug("wheelEvent update_tile_positions() completed")
 
-        self.update()
-        event.accept()
+            self.update()
+            event.accept()
+            logger.debug("wheelEvent END")
+        except Exception as e:
+            logger.error(f"Exception in wheelEvent: {e}\n{traceback.format_exc()}")
 
     def mousePressEvent(self, event):
         """Handle middle mouse button press for panning and left click for marquee selection"""
@@ -505,12 +609,87 @@ class InfiniteGridCanvas(QWidget):
 
     def update_tile_positions(self):
         """Update all tile positions based on current zoom and pan"""
-        for grid_pos, tile in self.tiles.items():
-            pixel_pos = self.get_pixel_position(grid_pos)
-            tile.move(pixel_pos)
-            # Update tile pixmap and size based on zoom
-            tile.update_pixmap()
+        logger.debug(f"update_tile_positions START - {len(self.tiles)} tiles to update")
+        try:
+            tile_list = list(self.tiles.items())  # Use list() to avoid dict change during iteration
+            logger.debug(f"Created tile list snapshot with {len(tile_list)} items")
+
+            for idx, (grid_pos, tile) in enumerate(tile_list):
+                try:
+                    tile_id = tile._instance_id if hasattr(tile, '_instance_id') else 'UNKNOWN'
+                    logger.debug(f"[{idx+1}/{len(tile_list)}] Updating TILE-{tile_id} at {grid_pos}")
+
+                    if hasattr(tile, '_is_deleted') and tile._is_deleted:
+                        logger.error(f"⚠️ DELETED TILE-{tile_id} still in self.tiles at {grid_pos}!")
+                        logger.error(f"Call stack:\n{''.join(traceback.format_stack())}")
+                        continue
+
+                    logger.debug(f"[TILE-{tile_id}] Getting pixel position...")
+                    pixel_pos = self.get_pixel_position(grid_pos)
+
+                    logger.debug(f"[TILE-{tile_id}] Moving to {pixel_pos}...")
+                    tile.move(pixel_pos)
+
+                    logger.debug(f"[TILE-{tile_id}] Updating pixmap...")
+                    # Update tile pixmap and size based on zoom
+                    tile.update_pixmap()
+
+                    logger.debug(f"[TILE-{tile_id}] Update complete")
+                except RuntimeError as e:
+                    logger.error(f"RuntimeError accessing tile at {grid_pos}: {e}\n{traceback.format_exc()}")
+                except Exception as e:
+                    logger.error(f"Exception updating tile at {grid_pos}: {e}\n{traceback.format_exc()}")
+
+            logger.debug("update_tile_positions END - all tiles updated")
+        except Exception as e:
+            logger.error(f"Exception in update_tile_positions: {e}\n{traceback.format_exc()}")
     
+
+    def validate_multi_drop_positions(self, grid_x, grid_y, num_images):
+        """
+        Validate that all positions for multi-image drop are available
+        
+        Args:
+            grid_x: Starting grid X position
+            grid_y: Grid Y position
+            num_images: Number of images to place
+            
+        Returns:
+            True if all positions are valid and available
+        """
+        for i in range(num_images):
+            check_pos = (grid_x + i, grid_y)
+            # Check bounds
+            if grid_x + i >= self.grid_columns or grid_y >= self.grid_rows:
+                return False
+            # Check if cell is occupied
+            if check_pos in self.tiles:
+                return False
+        return True
+    
+    
+    def validate_multi_drop_positions(self, grid_x, grid_y, num_images):
+        """
+        Validate that all positions for multi-image drop are available
+        
+        Args:
+            grid_x: Starting grid X position
+            grid_y: Grid Y position
+            num_images: Number of images to place
+            
+        Returns:
+            True if all positions are valid and available
+        """
+        for i in range(num_images):
+            check_pos = (grid_x + i, grid_y)
+            # Check bounds
+            if grid_x + i >= self.grid_columns or grid_y >= self.grid_rows:
+                return False
+            # Check if cell is occupied
+            if check_pos in self.tiles:
+                return False
+        return True
+
     def dragEnterEvent(self, event):
         if event.mimeData().hasText():
             event.acceptProposedAction()
@@ -531,15 +710,7 @@ class InfiniteGridCanvas(QWidget):
             pass
 
         # Check if all cells for multi-image placement are available
-        all_cells_available = True
-        if num_images > 1:
-            for i in range(num_images):
-                check_pos = (grid_x + i, grid_y)
-                if not (0 <= grid_x + i < self.grid_columns and
-                       0 <= grid_y < self.grid_rows and
-                       check_pos not in self.tiles):
-                    all_cells_available = False
-                    break
+        all_cells_available = self.validate_multi_drop_positions(grid_x, grid_y, num_images) if num_images > 1 else True
 
         # Only highlight if cell is empty and within bounds (and all cells for multi-image)
         if (0 <= grid_x < self.grid_columns and
@@ -578,6 +749,7 @@ class InfiniteGridCanvas(QWidget):
             if isinstance(data, dict) and "multi" in data:
                 # Multi-image drop - place them horizontally
                 multi_data = data["multi"]
+                logger.info(f"Multi-image drop at ({grid_x}, {grid_y}) - {len(multi_data)} items")
 
                 # Parse data - support both old format (list of strings) and new format (list of dicts)
                 if multi_data and isinstance(multi_data[0], dict):
@@ -588,26 +760,49 @@ class InfiniteGridCanvas(QWidget):
                     items = [{"path": p, "bank_index": None} for p in multi_data]
 
                 # Verify all cells are available
-                all_cells_available = True
-                for i in range(len(items)):
-                    check_pos = (grid_x + i, grid_y)
-                    if not (0 <= grid_x + i < self.grid_columns and
-                           0 <= grid_y < self.grid_rows and
-                           check_pos not in self.tiles):
-                        all_cells_available = False
-                        break
+                if self.validate_multi_drop_positions(grid_x, grid_y, len(items)):
+                    # Check if we're reusing dragged tiles
+                    if self.dragged_tiles:
+                        logger.info(f"REUSING {len(self.dragged_tiles)} existing tiles for multi-drop")
+                        # Reuse existing tiles - just move them
+                        for i, item in enumerate(items):
+                            current_grid_pos = (grid_x + i, grid_y)
+                            # Find matching tile from dragged_tiles by file path
+                            matching_tile = None
+                            for old_pos, tile in self.dragged_tiles.items():
+                                if tile.file_path == item["path"]:
+                                    matching_tile = tile
+                                    break
 
-                if all_cells_available:
-                    # Always create new tiles
-                    for i, item in enumerate(items):
-                        current_grid_pos = (grid_x + i, grid_y)
-                        file_path = item["path"]
-                        bank_index = item.get("bank_index")
-                        tile = GridTile(file_path, self, self.viewer, bank_index)
-                        pixel_pos = self.get_pixel_position(current_grid_pos)
-                        tile.move(pixel_pos)
-                        tile.show()
-                        self.tiles[current_grid_pos] = tile
+                            if matching_tile:
+                                logger.debug(f"[TILE-{matching_tile._instance_id}] Reusing tile at {current_grid_pos}")
+                                pixel_pos = self.get_pixel_position(current_grid_pos)
+                                matching_tile.move(pixel_pos)
+                                matching_tile.show()
+                                self.tiles[current_grid_pos] = matching_tile
+                            else:
+                                # Fallback: create new tile if no match found
+                                logger.warning(f"No matching tile found for {item['path']}, creating new")
+                                file_path = item["path"]
+                                bank_index = item.get("bank_index")
+                                tile = GridTile(file_path, self, self.viewer, bank_index)
+                                pixel_pos = self.get_pixel_position(current_grid_pos)
+                                tile.move(pixel_pos)
+                                tile.show()
+                                self.tiles[current_grid_pos] = tile
+                    else:
+                        logger.info(f"Creating {len(items)} NEW tiles for multi-drop (from bank)")
+                        # New tiles from bank
+                        for i, item in enumerate(items):
+                            current_grid_pos = (grid_x + i, grid_y)
+                            file_path = item["path"]
+                            bank_index = item.get("bank_index")
+                            tile = GridTile(file_path, self, self.viewer, bank_index)
+                            logger.debug(f"[TILE-{tile._instance_id}] Created and placed at {current_grid_pos}")
+                            pixel_pos = self.get_pixel_position(current_grid_pos)
+                            tile.move(pixel_pos)
+                            tile.show()
+                            self.tiles[current_grid_pos] = tile
 
                     event.acceptProposedAction()
 
@@ -713,13 +908,26 @@ class InfiniteGridCanvas(QWidget):
 
     def cleanup_multi_drag(self):
         """Clean up tiles after multi-tile drag completes"""
+        logger.info(f"cleanup_multi_drag() STARTING - dragged_tiles: {self.dragged_tiles is not None}")
         if self.dragged_tiles:
-            # Delete tiles that weren't reused
-            for tile in self.dragged_tiles.values():
-                # Check if tile was reused (still in self.tiles)
+            # Check if any tiles in dragged_tiles were NOT reused
+            unused_tiles = []
+            for pos, tile in self.dragged_tiles.items():
                 if tile not in self.tiles.values():
+                    unused_tiles.append((pos, tile))
+
+            if unused_tiles:
+                logger.info(f"Deleting {len(unused_tiles)} unused tiles")
+                for pos, tile in unused_tiles:
+                    logger.debug(f"[TILE-{tile._instance_id}] Deleting unused tile from pos {pos}")
                     tile.deleteLater()
+            else:
+                logger.info("All dragged tiles were reused - nothing to delete")
+
             self.dragged_tiles = None
+            logger.info("Cleanup complete")
+        else:
+            logger.warning("cleanup_multi_drag() called but dragged_tiles is None")
 
     def set_grid_dimensions(self, rows, columns):
         """Update the grid dimensions"""

@@ -231,8 +231,10 @@ class ImageViewer(QMainWindow):
         self.setWindowTitle("Image Bank")
         self.setGeometry(100, 100, 1200, 800)
 
-        # Track current project file
+        # Track current project file and modification state
         self.current_project_file = None
+        self.project_modified = False
+        self.project_modified = False
 
         # Main widget
         main_widget = QWidget()
@@ -330,6 +332,12 @@ class ImageViewer(QMainWindow):
         self.delete_btn = QPushButton("Delete Selected")
         self.delete_btn.clicked.connect(self.delete_selected)
         self.delete_btn.setVisible(False)
+        
+        # Add keyboard shortcut for delete
+        delete_action = QAction(self)
+        delete_action.setShortcut(QKeySequence.Delete)
+        delete_action.triggered.connect(self.delete_selected)
+        self.addAction(delete_action)
         button_row.addWidget(self.delete_btn)
 
         button_row.addStretch()
@@ -339,7 +347,8 @@ class ImageViewer(QMainWindow):
         button_row.addWidget(QLabel("Rows:"))
         self.rows_input = QSpinBox()
         self.rows_input.setMinimum(1)
-        self.rows_input.setMaximum(100)
+        from constants import MAX_GRID_ROWS
+        self.rows_input.setMaximum(MAX_GRID_ROWS)
         self.rows_input.setValue(GRID_ROWS)
         self.rows_input.setFixedWidth(60)
         button_row.addWidget(self.rows_input)
@@ -347,7 +356,8 @@ class ImageViewer(QMainWindow):
         button_row.addWidget(QLabel("Columns:"))
         self.columns_input = QSpinBox()
         self.columns_input.setMinimum(1)
-        self.columns_input.setMaximum(100)
+        from constants import MAX_GRID_COLUMNS
+        self.columns_input.setMaximum(MAX_GRID_COLUMNS)
         self.columns_input.setValue(GRID_COLUMNS)
         self.columns_input.setFixedWidth(60)
         button_row.addWidget(self.columns_input)
@@ -361,7 +371,8 @@ class ImageViewer(QMainWindow):
         # Add widgets to splitter
         splitter.addWidget(top_widget)
         splitter.addWidget(bottom_widget)
-        splitter.setSizes([500, 300])
+        from constants import SPLITTER_TOP_SIZE, SPLITTER_BOTTOM_SIZE
+        splitter.setSizes([SPLITTER_TOP_SIZE, SPLITTER_BOTTOM_SIZE])
         
         main_layout.addWidget(splitter)
         
@@ -376,19 +387,77 @@ class ImageViewer(QMainWindow):
         self.last_selected_grid_pos = None  # For range selection
 
         # Development: Auto-load images from assets folder if it exists
-        self.auto_load_assets()
+        # Disabled for production - uncomment for development
+        # self.auto_load_assets()  # Temporarily disabled for testing
+
+
+    def set_modified(self, modified=True):
+        """Mark project as modified and update window title"""
+        self.project_modified = modified
+        if self.current_project_file:
+            title = f"Image Bank - {os.path.basename(self.current_project_file)}"
+            if modified:
+                title += " *"
+            self.setWindowTitle(title)
+        elif modified:
+            self.setWindowTitle("Image Bank - New Project *")
+    
+    def check_unsaved_changes(self):
+        """Check for unsaved changes and prompt user"""
+        if self.project_modified:
+            reply = QMessageBox.question(
+                self,
+                "Unsaved Changes",
+                "You have unsaved changes. Do you want to save before continuing?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save
+            )
+            
+            if reply == QMessageBox.Save:
+                self.save_project()
+                return True
+            elif reply == QMessageBox.Discard:
+                return True
+            else:  # Cancel
+                return False
+        return True
+    
+    
+    def set_modified(self, modified=True):
+        """Mark project as modified and update window title"""
+        self.project_modified = modified
+        if self.current_project_file:
+            title = f"Image Bank - {os.path.basename(self.current_project_file)}"
+            if modified:
+                title += " *"
+            self.setWindowTitle(title)
+        elif modified:
+            self.setWindowTitle("Image Bank - New Project *")
+    
+    def check_unsaved_changes(self):
+        """Check for unsaved changes and prompt user"""
+        if self.project_modified:
+            reply = QMessageBox.question(
+                self,
+                "Unsaved Changes",
+                "You have unsaved changes. Do you want to save before continuing?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save
+            )
+            
+            if reply == QMessageBox.Save:
+                self.save_project()
+                return True
+            elif reply == QMessageBox.Discard:
+                return True
+            else:  # Cancel
+                return False
+        return True
 
     def new_project(self):
         """Create a new project (clear current state)"""
-        reply = QMessageBox.question(
-            self,
-            "New Project",
-            "Are you sure you want to start a new project? All unsaved changes will be lost.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-
-        if reply == QMessageBox.Yes:
+        if not self.check_unsaved_changes():
+            return
             # Clear everything
             self.clear_grid()
             self.image_paths.clear()
@@ -408,6 +477,7 @@ class ImageViewer(QMainWindow):
                 self
             )
             if success:
+                self.project_modified = False
                 QMessageBox.information(self, "Success", "Project saved successfully!")
                 self.setWindowTitle(f"Image Bank - {os.path.basename(self.current_project_file)}")
             else:
@@ -423,7 +493,7 @@ class ImageViewer(QMainWindow):
         filepath, _ = QFileDialog.getSaveFileName(
             self,
             "Save Project As",
-            desktop_path,
+            default_dir,
             f"Tiler Projects (*{ProjectManager.DEFAULT_EXTENSION})"
         )
 
@@ -431,6 +501,7 @@ class ImageViewer(QMainWindow):
             success = ProjectManager.save_project(filepath, self.canvas, self)
             if success:
                 self.current_project_file = filepath
+                self.project_modified = False
                 QMessageBox.information(self, "Success", "Project saved successfully!")
                 self.setWindowTitle(f"Image Bank - {os.path.basename(filepath)}")
             else:
@@ -438,12 +509,18 @@ class ImageViewer(QMainWindow):
 
     def load_project(self):
         """Load a project from a file"""
-        desktop_path = os.path.expanduser("~/Desktop")
+        if not self.check_unsaved_changes():
+            return
+        
+        # Try to use last directory or default to home
+        default_dir = os.path.expanduser("~")
+        if self.current_project_file:
+            default_dir = os.path.dirname(self.current_project_file)
 
         filepath, _ = QFileDialog.getOpenFileName(
             self,
             "Open Project",
-            desktop_path,
+            default_dir,
             f"Tiler Projects (*{ProjectManager.DEFAULT_EXTENSION})"
         )
 
@@ -531,7 +608,7 @@ class ImageViewer(QMainWindow):
 
     def import_images(self):
         desktop_path = os.path.expanduser("~/Desktop")
-        
+
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "Select Images",
@@ -542,17 +619,42 @@ class ImageViewer(QMainWindow):
         if files:
             self.image_paths.extend(files)
             self.refresh_grid()
+            self.set_modified()
     
     def clear_grid(self):
         """Clear all images from the canvas"""
+        if self.canvas.tiles:
+            reply = QMessageBox.question(
+                self,
+                "Clear Grid",
+                "Are you sure you want to clear all tiles from the grid?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+        
         self.clear_grid_selection()
         self.canvas.clear_all()
+        self.set_modified()
 
     def adjust_grid_size(self):
         """Adjust the grid size based on input values"""
+        from constants import MAX_GRID_ROWS, MAX_GRID_COLUMNS
+        
         rows = self.rows_input.value()
         columns = self.columns_input.value()
+        
+        if rows > MAX_GRID_ROWS or columns > MAX_GRID_COLUMNS:
+            QMessageBox.warning(
+                self,
+                "Grid Too Large",
+                f"Maximum grid size is {MAX_GRID_ROWS}x{MAX_GRID_COLUMNS}"
+            )
+            return
+        
         self.canvas.set_grid_dimensions(rows, columns)
+        self.set_modified()
 
     def toggle_select_mode(self):
         """Toggle between select mode and view mode"""
@@ -634,6 +736,9 @@ class ImageViewer(QMainWindow):
         self.delete_btn.setVisible(len(self.selected_paths) > 0)
     
     def delete_selected(self):
+        if not self.selected_paths:
+            return
+            
         for path in list(self.selected_paths):
             if path in self.image_paths:
                 self.image_paths.remove(path)
@@ -643,6 +748,7 @@ class ImageViewer(QMainWindow):
         self.selected_paths.clear()
         self.last_selected_index = None
         self.refresh_grid()
+        self.set_modified()
 
     def toggle_grid_selection(self, grid_pos):
         """Toggle selection of a grid tile"""
@@ -687,7 +793,15 @@ class ImageViewer(QMainWindow):
         """Clear all grid tile selections"""
         for grid_pos in list(self.selected_grid_tiles):
             if grid_pos in self.canvas.tiles:
-                self.canvas.tiles[grid_pos].set_selected(False)
+                tile = self.canvas.tiles[grid_pos]
+                # Safety check: don't access deleted tiles
+                if hasattr(tile, '_is_deleted') and tile._is_deleted:
+                    continue
+                try:
+                    tile.set_selected(False)
+                except RuntimeError:
+                    # Widget was already deleted
+                    pass
         self.selected_grid_tiles.clear()
         self.last_selected_grid_pos = None
 
@@ -753,3 +867,18 @@ class ImageViewer(QMainWindow):
 
         layout.addWidget(label)
         dialog.exec()
+    
+    def closeEvent(self, event):
+        """Handle window close event"""
+        if self.check_unsaved_changes():
+            event.accept()
+        else:
+            event.ignore()
+
+
+    def closeEvent(self, event):
+        """Handle window close event"""
+        if self.check_unsaved_changes():
+            event.accept()
+        else:
+            event.ignore()
